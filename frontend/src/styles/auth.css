@@ -1,0 +1,91 @@
+/* Public/auth page styles — `nq-` prefix, scoped under .nq (see style.md §2.4, §6). */
+.nq {
+  --bg: #f0f2f8; --surface: #ffffff; --surface-2: #f8fafc;
+  --border: #e2e8f0; --border-s: #cbd5e1;
+  --brand: #00ac69; --brand-hover: #16a34a; --brand-dark: #007849;
+  --brand-soft: #ecfdf5; --brand-100: #a7f3d0;
+  --red: #ff413a;
+  --text: #242c3a; --muted: #425466;
+  --brand-grad: linear-gradient(120deg, #00ac69 0%, #00ac69 45%, #00cfd5 130%);
+  --brand-grad-h: linear-gradient(120deg, #007849 0%, #00ac69 45%, #00cfd5 120%);
+  --shadow: 0 12px 32px rgba(15,23,42,.08);
+
+  font-family: 'Baloo 2', system-ui, sans-serif;
+  line-height: 1.6;
+  color: var(--text);
+  background: var(--bg);
+  min-height: 100vh;
+  min-height: 100dvh;
+  display: flex;
+}
+.nq *, .nq *::before, .nq *::after { box-sizing: border-box; }
+
+/* ── Centered login card ── */
+.nq-auth-form {
+  flex: 1; display: flex; align-items: center; justify-content: center;
+  padding: clamp(16px, 5vw, 64px);
+}
+.nq-card {
+  width: 100%; max-width: 420px;
+  background: var(--surface); padding: 36px 32px; border-radius: 20px;
+  box-shadow: var(--shadow); border: 1px solid var(--border);
+  animation: nqFadeUp .6s cubic-bezier(0.22, 0.68, 0, 1.2) both;
+}
+.nq-card .nq-wordmark { margin-bottom: 28px; }
+.nq-eyebrow { font-size: 12px; font-weight: 700; letter-spacing: 1.8px; text-transform: uppercase; color: var(--brand-dark); display: inline-flex; align-items: center; gap: 8px; }
+.nq-card h2 { font-size: 30px; line-height: 1.2; margin: 8px 0 6px; font-weight: 700; color: #12171e; }
+.nq-card .nq-sub { color: var(--muted); margin: 0 0 28px; font-size: 15px; }
+
+.nq-wordmark { font: 800 22px/1 'Baloo 2', system-ui, sans-serif; letter-spacing: -0.4px; color: var(--text); }
+.nq-wordmark em { font-style: normal; background: var(--brand-grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
+
+.nq-field { margin-bottom: 16px; }
+.nq-label { display: block; font-size: 13.5px; font-weight: 600; color: var(--muted); margin-bottom: 6px; }
+.nq-input {
+  width: 100%; min-height: 46px; padding: 10px 14px;
+  font: inherit; font-size: 15px; color: #12171e;
+  background: var(--surface-2); border: 1px solid var(--border-s); border-radius: 8px;
+  transition: border-color .2s, background .2s, box-shadow .2s;
+}
+.nq-input:hover { border-color: #94a3b8; }
+.nq-input:focus { outline: none; border-color: var(--brand); background: #fff; box-shadow: 0 0 0 4px rgba(0,172,105,.14); }
+.nq-input.err { border-color: var(--red); background: #fff5f5; box-shadow: 0 0 0 4px rgba(255,65,58,.1); }
+.nq-ferr { color: var(--red); font-size: 12.5px; margin-top: 5px; display: block; }
+
+.nq-pw { position: relative; }
+.nq-pw .nq-input { padding-right: 48px; }
+.nq-pw-toggle {
+  position: absolute; right: 6px; top: 50%; transform: translateY(-50%);
+  width: 36px; height: 36px; border: 0; border-radius: 6px; background: transparent;
+  color: var(--muted); cursor: pointer; display: grid; place-items: center;
+}
+.nq-pw-toggle:hover { background: var(--brand-soft); color: var(--brand-dark); }
+
+.nq-btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+  min-height: 48px; padding: 10px 22px; border-radius: 8px; border: 0;
+  font: inherit; font-size: 15px; font-weight: 600; cursor: pointer;
+  transition: background .2s, box-shadow .2s, transform .2s, opacity .2s;
+  position: relative; overflow: hidden;
+}
+.nq-btn-primary { background: var(--brand-grad); color: #fff; box-shadow: 0 6px 18px rgba(0,172,105,.22); }
+.nq-btn-primary:hover { background: var(--brand-grad-h); box-shadow: 0 12px 30px rgba(0,172,105,.30); transform: translateY(-2px); }
+.nq-btn-block { width: 100%; }
+.nq-btn:disabled { opacity: .6; pointer-events: none; }
+
+.nq-alert { background: #fff5f5; color: #a20e00; border: 1px solid #fecaca; border-radius: 8px; padding: 10px 14px; font-size: 14px; margin-bottom: 16px; }
+.nq-demo { margin-top: 20px; padding: 12px 14px; border-radius: 8px; background: var(--brand-soft); color: var(--brand-dark); font-size: 13.5px; border: 1px solid var(--brand-100); }
+
+.nq-signal { width: 7px; height: 7px; border-radius: 50%; background: var(--brand); box-shadow: 0 0 0 4px rgba(0,172,105,.15); animation: nqPulse 2s infinite; }
+@keyframes nqPulse { 0%, 100% { box-shadow: 0 0 0 4px rgba(0,172,105,.15); } 50% { box-shadow: 0 0 0 7px rgba(0,172,105,.05); } }
+.nq-spin { width: 18px; height: 18px; border: 2px solid rgba(255,255,255,.4); border-top-color: #fff; border-radius: 50%; animation: nqSpin .8s linear infinite; }
+@keyframes nqSpin { to { transform: rotate(360deg); } }
+
+@media (max-width: 480px) {
+  .nq-auth-form { align-items: flex-start; padding-top: 40px; }
+  .nq-card { padding: 28px 20px; border-radius: 16px; }
+  .nq-card h2 { font-size: 26px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .nq *, .nq *::before, .nq *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
+}

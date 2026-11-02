@@ -1,0 +1,32 @@
+html, body, #root { min-height: 100%; }
+body {
+  margin: 0;
+  font-family: 'Baloo 2', system-ui, sans-serif;
+  background: #f0f2f8;
+  color: #242c3a;
+  -webkit-font-smoothing: antialiased;
+}
+::selection { background: #a7f3d0; color: #242c3a; }
+:focus-visible { outline: 2px solid #00ac69; outline-offset: 3px; }
+
+/* Hide number spinners */
+input[type='number']::-webkit-outer-spin-button,
+input[type='number']::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+input[type='number'] { -moz-appearance: textfield; }
+
+/* Slim scrollbar */
+* { scrollbar-width: thin; scrollbar-color: #cbd5e1 transparent; }
+
+.scrollbar-hide { scrollbar-width: none; }
+.scrollbar-hide::-webkit-scrollbar { display: none; }
+
+@keyframes nqFadeUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
+.nq-fade-up { animation: nqFadeUp .5s cubic-bezier(0.22, 0.68, 0, 1.2) both; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}
