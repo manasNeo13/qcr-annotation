@@ -2,12 +2,26 @@
 import { labelImage, seedDocuments, seedUsers } from '../dev/seed.js';
 import { istDay } from '../lib/istDay.js';
 import { getStatus } from '../lib/status.js';
+import { NONE_KEY } from '../lib/validation.js';
 
 const users = seedUsers();
 const docs = seedDocuments();
 
 const statusOf = (d) => getStatus(d.metadata.mfgDate, d.metadata.expiryDate);
 const toDto = (d) => ({ ...d, imageRef: labelImage(d), status: statusOf(d), history: [...d.history] });
+/** Mock EAN = product name (memory mode has no real EANs). */
+const eanOf = (d) => d.productName;
+const keyMatch = (v, want) => !want || (want === NONE_KEY ? !v : v === want);
+
+function filterDocs({ q = '', from, to, ean, batch }) {
+  const term = q.toLowerCase();
+  return docs.filter((d) => {
+    const day = istDay(new Date(d.updatedAt));
+    if (from && (day < from || day > to)) return false;
+    if (term && ![d.productName, d.fileName, d.metadata.batchNumber, d.id].some((f) => f.toLowerCase().includes(term))) return false;
+    return keyMatch(eanOf(d), ean) && keyMatch(d.metadata.batchNumber, batch);
+  });
+}
 
 export const memoryRepo = {
   name: 'memory',
@@ -24,20 +38,14 @@ export const memoryRepo = {
   },
 
   documents: {
-    async list({ page, pageSize, q, status, from, to }) {
-      const term = q.toLowerCase();
-      const inRange = from ? docs.filter((d) => { const day = istDay(new Date(d.updatedAt)); return day >= from && day <= to; }) : docs;
-      const searched = term
-        ? inRange.filter((d) =>
-            [d.productName, d.fileName, d.metadata.batchNumber, d.id].some((f) => f.toLowerCase().includes(term)),
-          )
-        : inRange;
+    async list({ page, pageSize, status, ...f }) {
+      const searched = filterDocs(f);
       const counts = { all: searched.length, ok: 0, near_expiry: 0, expired: 0 };
       for (const d of searched) counts[statusOf(d)]++;
-      const filtered = status === 'all' ? searched : searched.filter((d) => statusOf(d) === status);
-      const sorted = [...filtered].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+      const byStatus = status === 'all' ? searched : searched.filter((d) => statusOf(d) === status);
+      const sorted = [...byStatus].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
       const start = (page - 1) * pageSize;
-      return { items: sorted.slice(start, start + pageSize).map(toDto), total: filtered.length, counts };
+      return { items: sorted.slice(start, start + pageSize).map(toDto), total: byStatus.length, counts };
     },
 
     async dayCounts({ from, to }) {
@@ -51,9 +59,42 @@ export const memoryRepo = {
       return { days: [...map].sort().map(([date, count]) => ({ date, count })), latest };
     },
 
-    async orderedIds({ q, status, from, to }) {
-      const { items } = await this.list({ page: 1, pageSize: docs.length, q, status, from, to });
+    async orderedIds(f) {
+      const { items } = await this.list({ ...f, page: 1, pageSize: docs.length });
       return items.map((d) => d.id);
+    },
+
+    async filterOptions() {
+      return { clients: [] };
+    },
+
+    async groups(by, { page, pageSize, status, ...f }) {
+      const rows = filterDocs(f);
+      const counts = { all: rows.length, ok: 0, near_expiry: 0, expired: 0 };
+      for (const d of rows) counts[statusOf(d)]++;
+      const map = new Map();
+      for (const d of rows) {
+        const st = statusOf(d);
+        if (status !== 'all' && st !== status) continue;
+        const key = (by === 'ean' ? eanOf(d) : d.metadata.batchNumber) || NONE_KEY;
+        const g = map.get(key) ?? { key, total: 0, batchSet: new Set(), counts: { ok: 0, near_expiry: 0, expired: 0 }, latest: '' };
+        g.total++;
+        g.counts[st]++;
+        g.batchSet.add(d.metadata.batchNumber || NONE_KEY);
+        if (d.updatedAt > g.latest) g.latest = d.updatedAt;
+        map.set(key, g);
+      }
+      const all = [...map.values()].sort((a, b) =>
+        by === 'ean'
+          ? b.batchSet.size - a.batchSet.size || b.total - a.total || b.latest.localeCompare(a.latest)
+          : b.latest.localeCompare(a.latest),
+      );
+      const start = (page - 1) * pageSize;
+      return {
+        total: all.length,
+        counts,
+        items: all.slice(start, start + pageSize).map(({ batchSet, ...g }) => ({ ...g, ...(by === 'ean' ? { batches: batchSet.size } : {}) })),
+      };
     },
 
     async get(id) {

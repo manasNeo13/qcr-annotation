@@ -7,6 +7,7 @@ import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import { api } from '../api';
 import { colors } from '../theme';
+import type { DayScope } from '../types';
 import { rangeLabel } from '../utils/format';
 
 const F = 'YYYY-MM-DD';
@@ -16,6 +17,8 @@ interface Props {
   from?: string;
   to?: string;
   latest?: string | null;
+  /** Client → dots only for captures in that scope. */
+  scope?: DayScope;
   /** undefined from = all dates */
   onChange: (from?: string, to?: string) => void;
 }
@@ -27,7 +30,7 @@ function monthGrid(month: Dayjs) {
   return Array.from({ length: 42 }, (_, i) => start.add(i, 'day'));
 }
 
-export default function DateRangeFilter({ from, to, latest, onChange }: Props) {
+export default function DateRangeFilter({ from, to, latest, scope = {}, onChange }: Props) {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const [month, setMonth] = useState(() => dayjs(from ?? latest ?? undefined).startOf('month'));
   const [pendingStart, setPendingStart] = useState<string | null>(null); // first click of a range
@@ -38,8 +41,8 @@ export default function DateRangeFilter({ from, to, latest, onChange }: Props) {
   const gridTo = grid[41].format(F);
 
   const { data } = useQuery({
-    queryKey: ['days', gridFrom, gridTo],
-    queryFn: () => api.getDays(gridFrom, gridTo),
+    queryKey: ['days', gridFrom, gridTo, scope],
+    queryFn: () => api.getDays(gridFrom, gridTo, scope),
     enabled: !!anchor,
     staleTime: 60_000,
   });

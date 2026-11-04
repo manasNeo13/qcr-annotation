@@ -6,11 +6,13 @@
  *   store       — store ids (field `id`)
  * Edits write to the NEWEST metadata doc of a capture; previous values pushed to annotation_history.
  */
+import dns from 'node:dns';
 import { MongoClient } from 'mongodb';
 import { env } from '../config/env.js';
 import { HttpError } from '../lib/httpError.js';
 import { IST_OFFSET_MS, istWindow } from '../lib/istDay.js';
 import { NEAR_EXPIRY_PCT, startOfToday, toISODate } from '../lib/status.js';
+import { NONE_KEY } from '../lib/validation.js';
 
 const ORG_WIDE_ROLES = ['nhq', 'organization admin', 'admin', 'org admin'];
 const ACCESS_TTL_MS = 60_000;
@@ -21,35 +23,68 @@ const col = (n) => db.collection(n);
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // ── Access ────────────────────────────────────────────────────────────────
-const accessCache = new Map(); // userId → { at, envIds }
+const accessCache = new Map(); // userId → { at, rows, envIds }
 
-/** Store ids the user may see (mirrors main app services/userAccess.js). */
-async function allowedStoreIds(userId) {
+/** Stores + warehouses the user may see (mirrors main app services/userAccess.js). */
+async function allowedStores(userId) {
   const user = await col('users').findOne({ id: userId }, { projection: { role: 1, format_id: 1, org_id: 1, status: 1 } });
   if (!user || user.status === false) throw new HttpError(401, 'Account not active');
   // NOTE: stores currently have no org_id → no org filter when user/org missing.
   const orgFilter = user.org_id ? { org_id: { $in: [user.org_id, String(user.org_id)] } } : {};
-  const orgStores = await col('store').distinct('id', orgFilter);
-  if (ORG_WIDE_ROLES.includes(String(user.role ?? '').trim().toLowerCase())) return orgStores;
+  const orgStores = await col('store').find(orgFilter, { projection: { _id: 0, id: 1 } }).toArray();
+  const all = orgStores
+    .filter((s) => s.id != null && s.id !== '')
+    .map((s) => ({ id: String(s.id) }));
   const own = Array.isArray(user.format_id) ? user.format_id : user.format_id ? [user.format_id] : [];
-  return orgStores.filter((s) => own.includes(s));
+  const orgWide = ORG_WIDE_ROLES.includes(String(user.role ?? '').trim().toLowerCase());
+  // Warehouses (no org_id in data) → org-wide roles or explicitly assigned ids only.
+  const wh = (await col('warehouse').find({}, { projection: { _id: 0, id: 1 } }).toArray())
+    .filter((w) => w.id != null && w.id !== '' && (orgWide || own.includes(String(w.id))))
+    .map((w) => ({ id: String(w.id), kind: 'warehouse' }));
+  const stores = orgWide ? all : all.filter((s) => own.includes(s.id));
+  return [...stores.map((s) => ({ ...s, kind: 'store' })), ...wh];
 }
 
-async function allowedEnvIds(userId) {
+/** Per-user scope: captures in allowed stores (env_id, client). Cached 1 min. */
+async function scope(userId, fresh = false) {
   const hit = accessCache.get(userId);
-  if (hit && Date.now() - hit.at < ACCESS_TTL_MS) return hit.envIds;
-  const stores = await allowedStoreIds(userId);
-  const envIds = stores.length ? await col('environment').distinct('env_id', { store_id: { $in: stores } }) : [];
-  accessCache.set(userId, { at: Date.now(), envIds });
-  return envIds;
+  if (!fresh && hit && Date.now() - hit.at < ACCESS_TTL_MS) return hit;
+  const stores = await allowedStores(userId);
+  const raw = stores.length
+    ? await col('environment')
+        .find(
+          {
+            $or: [
+              { store_id: { $in: stores.filter((s) => s.kind === 'store').map((s) => s.id) } },
+              { warehouse_id: { $in: stores.filter((s) => s.kind === 'warehouse').map((s) => s.id) } },
+            ],
+          },
+          { projection: { _id: 0, env_id: 1, client_name: 1 } },
+        )
+        .toArray()
+    : [];
+  const rows = raw
+    .filter((r) => r.env_id)
+    .map((r) => ({ env: r.env_id, client: String(r.client_name ?? '').trim().toLowerCase() }));
+  const s = { at: Date.now(), rows, envIds: rows.map((r) => r.env) };
+  accessCache.set(userId, s);
+  return s;
+}
+
+const allowedEnvIds = async (userId) => (await scope(userId)).envIds;
+
+/** Allowed env ids narrowed by client filter. */
+async function scopedEnvIds(userId, { client } = {}) {
+  const s = await scope(userId);
+  if (!client) return s.envIds;
+  const c = client.toLowerCase();
+  return s.rows.filter((r) => r.client === c).map((r) => r.env);
 }
 
 async function assertCanAccess(userId, envId) {
-  const ids = await allowedEnvIds(userId);
-  if (!ids.includes(envId)) {
+  if (!(await allowedEnvIds(userId)).includes(envId)) {
     // Fresh capture may postdate cache → retry once uncached.
-    accessCache.delete(userId);
-    if (!(await allowedEnvIds(userId)).includes(envId)) throw new HttpError(404, 'Document not found');
+    if (!(await scope(userId, true)).envIds.includes(envId)) throw new HttpError(404, 'Document not found');
   }
 }
 
@@ -127,6 +162,27 @@ function searchStage(q) {
   return [{ $match: { $or: [{ batch: re }, { ean: re }, { _id: re }] } }];
 }
 
+/** EAN / batch drill-down. NONE_KEY = missing ('' or null). */
+function drillStage({ ean, batch }) {
+  const m = (field, v) => (v === NONE_KEY ? { $or: [{ [field]: null }, { [field]: '' }] } : { [field]: v });
+  const and = [];
+  if (ean) and.push(m('ean', ean));
+  if (batch) and.push(m('batch', batch));
+  return and.length ? [{ $match: { $and: and } }] : [];
+}
+
+const statusCount = (st) => ({ $sum: { $cond: [{ $eq: ['$status', st] }, 1, 0] } });
+const keyOf = (field) => ({ $cond: [{ $eq: [{ $ifNull: [field, ''] }, ''] }, NONE_KEY, { $toString: field }] });
+
+/** Shared pipeline head: scoped rows + date + search + drill-down. null = nothing in scope. */
+async function filteredRows(f, user) {
+  const envIds = await scopedEnvIds(user.id, f);
+  if (!envIds.length) return null;
+  return [...rowStages(envIds, f), ...searchStage(f.q), ...drillStage(f)];
+}
+
+const emptyCounts = () => ({ all: 0, ok: 0, near_expiry: 0, expired: 0 });
+
 const iso = (d) => (d instanceof Date && !Number.isNaN(d.getTime()) ? d : null);
 const fileOf = (url) => (url ? decodeURIComponent(String(url).split('?')[0].split('/').pop() || '') : '');
 
@@ -136,6 +192,7 @@ function toDto(r) {
   return {
     id: r._id,
     productName: ean ? `EAN ${ean}` : 'No EAN',
+    ean,
     fileName: fileOf(r.img),
     imageRef: r.img || '',
     metadata: {
@@ -162,6 +219,9 @@ async function getRow(envId) {
 export const mongoRepo = {
   name: 'mongo',
   async init() {
+    // Some networks' DNS (home routers, mobile hotspots) refuse SRV lookups → querySrv ECONNREFUSED.
+    // Override with DNS_SERVERS=8.8.8.8,1.1.1.1 in .env (unset = system DNS).
+    if (process.env.DNS_SERVERS) dns.setServers(process.env.DNS_SERVERS.split(',').map((s) => s.trim()));
     client = new MongoClient(env.MONGODB_URI, { serverSelectionTimeoutMS: 10_000 });
     await client.connect();
     db = client.db();
@@ -195,15 +255,15 @@ export const mongoRepo = {
   },
 
   documents: {
-    async list({ page, pageSize, q, status, from, to }, user) {
-      const envIds = await allowedEnvIds(user.id);
-      const empty = { all: 0, ok: 0, near_expiry: 0, expired: 0 };
-      if (!envIds.length) return { items: [], total: 0, counts: empty };
+    async list(f, user) {
+      const { page, pageSize, status } = f;
+      const empty = emptyCounts();
+      const head = await filteredRows(f, user);
+      if (!head) return { items: [], total: 0, counts: empty };
       const [res] = await col('metadata')
         .aggregate(
           [
-            ...rowStages(envIds, { from, to }),
-            ...searchStage(q),
+            ...head,
             {
               $facet: {
                 counts: [{ $group: { _id: '$status', n: { $sum: 1 } } }],
@@ -226,8 +286,8 @@ export const mongoRepo = {
     },
 
     /** Captures per IST day in [from, to] + latest day with data — calendar dots. */
-    async dayCounts({ from, to }, user) {
-      const envIds = await allowedEnvIds(user.id);
+    async dayCounts({ from, to, ...f }, user) {
+      const envIds = await scopedEnvIds(user.id, f);
       if (!envIds.length) return { days: [], latest: null };
       const [res] = await col('metadata')
         .aggregate(
@@ -260,20 +320,79 @@ export const mongoRepo = {
       };
     },
 
+    /** Dropdown options within user scope. */
+    async filterOptions(user) {
+      const s = await scope(user.id);
+      return { clients: [...new Set(s.rows.map((r) => r.client).filter(Boolean))].sort((x, y) => x.localeCompare(y)) };
+    },
+
+    /** Grouped list. by = 'ean' (with batch count) | 'batch' (usually inside f.ean). */
+    async groups(by, f, user) {
+      const { page, pageSize, status } = f;
+      const counts = emptyCounts();
+      const head = await filteredRows(f, user);
+      if (!head) return { items: [], total: 0, counts };
+      const field = by === 'ean' ? '$ean' : '$batch';
+      const [res] = await col('metadata')
+        .aggregate(
+          [
+            ...head,
+            {
+              $facet: {
+                counts: [{ $group: { _id: '$status', n: { $sum: 1 } } }],
+                groups: [
+                  ...(status === 'all' ? [] : [{ $match: { status } }]),
+                  {
+                    $group: {
+                      _id: keyOf(field),
+                      total: { $sum: 1 },
+                      ok: statusCount('ok'),
+                      near_expiry: statusCount('near_expiry'),
+                      expired: statusCount('expired'),
+                      latest: { $max: '$ts' },
+                      ...(by === 'ean' ? { batchSet: { $addToSet: keyOf('$batch') } } : {}),
+                    },
+                  },
+                  ...(by === 'ean' ? [{ $addFields: { batches: { $size: '$batchSet' } } }, { $project: { batchSet: 0 } }] : []),
+                  // EANs: most batches first (then most captures, newest). Batches: newest first.
+                  { $sort: by === 'ean' ? { batches: -1, total: -1, latest: -1, _id: 1 } : { latest: -1, _id: 1 } },
+                ],
+              },
+            },
+          ],
+          { allowDiskUse: true },
+        )
+        .toArray();
+      for (const c of res.counts) counts[c._id] = c.n;
+      counts.all = counts.ok + counts.near_expiry + counts.expired;
+      const start = (page - 1) * pageSize;
+      return {
+        total: res.groups.length,
+        counts,
+        items: res.groups.slice(start, start + pageSize).map((x) => ({
+          key: x._id,
+          total: x.total,
+          ...(by === 'ean' ? { batches: x.batches } : {}),
+          counts: { ok: x.ok, near_expiry: x.near_expiry, expired: x.expired },
+          latest: iso(x.latest)?.toISOString() ?? null,
+        })),
+      };
+    },
+
     async get(id, user) {
       await assertCanAccess(user.id, id);
       return getRow(id);
     },
 
     /** Ordered ids (same filter + sort as list) — for prev/next navigation. */
-    async orderedIds({ q, status, from, to }, user) {
-      const envIds = await allowedEnvIds(user.id);
-      if (!envIds.length) return [];
+    async orderedIds(f, user) {
+      const { status } = f;
+      const head = await filteredRows(f, user);
+      if (!head) return [];
       const rows = await col('metadata')
         .aggregate(
           [
-            ...rowStages(envIds, { from, to }),
-            ...searchStage(q),
+            ...head,
             ...(status === 'all' ? [] : [{ $match: { status } }]),
             { $sort: { ts: -1, _id: -1 } },
             { $project: { _id: 1 } },

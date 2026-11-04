@@ -14,7 +14,10 @@ import HistoryPanel from '../components/HistoryPanel';
 import ImageViewer from '../components/ImageViewer';
 import MetadataForm from '../components/MetadataForm';
 import StatusChip from '../components/StatusChip';
-import type { DocMetadata, DocumentItem, StatusFilter } from '../types';
+import PageBreadcrumbs, { type Crumb } from '../components/PageBreadcrumbs';
+import { readFilter } from '../hooks/useListState';
+import type { DocMetadata, DocumentItem } from '../types';
+import { annotationPath, batchLabel, eanLabel } from '../utils/annotation';
 import { formatDate, formatDateTime, formatMRP } from '../utils/format';
 import { NEAR_EXPIRY_PCT } from '../utils/status';
 import { colors } from '../theme';
@@ -48,8 +51,6 @@ function Field({ label, value, mono }: { label: string; value: string; mono?: bo
   );
 }
 
-const STATUSES: StatusFilter[] = ['all', 'ok', 'near_expiry', 'expired'];
-
 /** Remount per id → edit state resets on prev/next. */
 export default function DocumentDetailPage() {
   const { id = '' } = useParams();
@@ -59,12 +60,30 @@ export default function DocumentDetailPage() {
 function DocumentDetail({ id }: { id: string }) {
   const navigate = useNavigate();
   const [params] = useSearchParams();
-  const q = params.get('q') ?? '';
-  const statusParam = params.get('status') as StatusFilter | null;
-  const status: StatusFilter = statusParam && STATUSES.includes(statusParam) ? statusParam : 'all';
-  const from = params.get('all') === '1' ? undefined : (params.get('from') ?? undefined);
-  const to = from ? (params.get('to') ?? from) : undefined;
+  // Came from Annotation drill-down → ean + batch in URL; prev/next stays inside that batch.
+  const ean = params.get('ean') ?? undefined;
+  const batch = params.get('batch') ?? undefined;
+  const fromAnnotation = !!(ean && batch);
+  const filter = { ...readFilter(params), ean, batch };
   const listSearch = params.toString();
+  // Back target = list this capture was opened from.
+  const listParams = new URLSearchParams(params);
+  listParams.delete('ean');
+  listParams.delete('batch');
+  const backTo = fromAnnotation
+    ? annotationPath(ean, batch, listParams)
+    : `/documents${listSearch ? `?${listSearch}` : ''}`;
+  const upParams = new URLSearchParams(listParams);
+  upParams.delete('page');
+  upParams.delete('q');
+  const crumbs: Crumb[] = fromAnnotation
+    ? [
+        { label: 'Annotation', to: annotationPath(undefined, undefined, upParams) },
+        { label: `EAN ${eanLabel(ean!)}`, to: annotationPath(ean, undefined, upParams) },
+        { label: `Batch ${batchLabel(batch!)}`, to: backTo },
+        { label: 'Capture' },
+      ]
+    : [{ label: 'Filter Table', to: backTo }, { label: 'Capture' }];
   const qc = useQueryClient();
   const { user } = useAuth();
   const [editing, setEditing] = useState(false);
@@ -87,6 +106,7 @@ function DocumentDetail({ id }: { id: string }) {
     onSuccess: (updated: DocumentItem) => {
       qc.setQueryData(['document', id], updated);
       qc.invalidateQueries({ queryKey: ['documents'] });
+      qc.invalidateQueries({ queryKey: ['groups'] });
       setEditing(false);
       setDirty(false);
       toast.success('Metadata updated');
@@ -95,8 +115,8 @@ function DocumentDetail({ id }: { id: string }) {
   });
 
   const { data: nav } = useQuery({
-    queryKey: ['neighbors', id, q, status, from, to],
-    queryFn: () => api.getNeighbors(id, { q, status, from, to }),
+    queryKey: ['neighbors', id, filter],
+    queryFn: () => api.getNeighbors(id, filter),
     placeholderData: keepPreviousData,
   });
 
@@ -133,7 +153,10 @@ function DocumentDetail({ id }: { id: string }) {
     return () => window.removeEventListener('keydown', onKey);
   }, [editing, go, nav?.prevId, nav?.nextId]);
 
-  const back = () => navigate(`/documents${listSearch ? `?${listSearch}` : ''}`);
+  const back = () => {
+    if (editing && dirty && !window.confirm('Discard unsaved changes?')) return;
+    navigate(backTo);
+  };
 
   const cancel = () => {
     if (dirty && !window.confirm('Discard unsaved changes?')) return;
@@ -154,8 +177,8 @@ function DocumentDetail({ id }: { id: string }) {
         >
           {(error as Error)?.message || 'Could not load document.'}
         </Alert>
-        <Button component={RouterLink} to="/documents" startIcon={<ArrowBackIcon />} sx={{ mt: 2 }}>
-          Back to documents
+        <Button component={RouterLink} to={backTo} startIcon={<ArrowBackIcon />} sx={{ mt: 2 }}>
+          Back to list
         </Button>
       </Box>
     );
@@ -163,6 +186,7 @@ function DocumentDetail({ id }: { id: string }) {
 
   return (
     <Box className="nq-fade-up">
+      <PageBreadcrumbs items={crumbs} />
       {/* Header */}
       <Box
         sx={{
@@ -176,7 +200,7 @@ function DocumentDetail({ id }: { id: string }) {
         <Tooltip title="Back">
           <IconButton
             onClick={back}
-            aria-label="Back to documents"
+            aria-label="Back to list"
             sx={{
               mt: { xs: 0, sm: 0.25 },
               bgcolor: '#fff',

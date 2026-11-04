@@ -50,10 +50,22 @@ const listBase = z.object({
   pageSize: z.coerce.number().int().min(1).max(15).default(15), // UI shows 15 per page
   q: z.string().trim().max(100).optional().default(''),
   status: z.enum(['all', 'ok', 'near_expiry', 'expired']).optional().default('all'),
+  // Scope filter. client = environment.client_name.
+  client: z.string().trim().max(100).optional(),
+  // Drill-down. NONE_KEY = missing value.
+  ean: z.string().trim().max(100).optional(),
+  batch: z.string().trim().max(100).optional(),
 });
 export const listQuerySchema = withRange(listBase);
 
-export const daysQuerySchema = z.object({ from: day, to: day });
+/** Sentinel for "no EAN" / "no batch" groups. */
+export const NONE_KEY = '__none__';
+
+export const daysQuerySchema = z.object({
+  from: day,
+  to: day,
+  client: z.string().trim().max(100).optional(),
+});
 
 /** Parse or throw 400 with field errors. */
 export function parse(schema, data) {

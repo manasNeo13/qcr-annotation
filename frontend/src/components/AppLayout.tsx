@@ -1,10 +1,11 @@
 import { useState } from 'react';
-import { Link as RouterLink, Outlet, useNavigate } from 'react-router-dom';
+import { Link as RouterLink, Outlet, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import {
   AppBar,
   Avatar,
   Box,
+  Button,
   ButtonBase,
   Divider,
   ListItemIcon,
@@ -14,8 +15,52 @@ import {
   Typography,
 } from '@mui/material';
 import LogoutIcon from '@mui/icons-material/LogoutOutlined';
+import ListIcon from '@mui/icons-material/TableRowsOutlined';
+import LayersIcon from '@mui/icons-material/LayersOutlined';
 import { useAuth } from '../auth/AuthContext';
 import { brandGrad, colors } from '../theme';
+
+const NAV = [
+  { key: 'documents', label: 'Filter Table', to: '/documents', icon: <ListIcon fontSize="small" /> },
+  { key: 'annotation', label: 'Annotation', to: '/annotation', icon: <LayersIcon fontSize="small" /> },
+] as const;
+
+/** Header tabs. Detail page opened from Annotation (ean+batch in URL) counts as Annotation. */
+function NavTabs() {
+  const { pathname } = useLocation();
+  const [params] = useSearchParams();
+  const active = pathname.startsWith('/annotation') || (pathname.startsWith('/documents/') && params.get('ean'))
+    ? 'annotation'
+    : 'documents';
+  return (
+    <Box component="nav" aria-label="Main" sx={{ display: 'flex', gap: 0.5, justifySelf: 'center' }}>
+      {NAV.map((n) => {
+        const on = active === n.key;
+        return (
+          <Button
+            key={n.key}
+            component={RouterLink}
+            to={n.to}
+            size="small"
+            startIcon={n.icon}
+            aria-current={on ? 'page' : undefined}
+            sx={{
+              px: { xs: 1, sm: 1.5 },
+              minWidth: 0,
+              fontWeight: 700,
+              color: on ? colors.brandDark : colors.muted,
+              bgcolor: on ? colors.brandSoft : 'transparent',
+              '&:hover': { bgcolor: on ? colors.brandSoft : colors.background },
+              '& .MuiButton-startIcon': { mr: { xs: 0.5, sm: 1 }, display: { xs: 'none', sm: 'inherit' } },
+            }}
+          >
+            {n.label}
+          </Button>
+        );
+      })}
+    </Box>
+  );
+}
 
 export default function AppLayout() {
   const { user, logout } = useAuth();
@@ -43,11 +88,21 @@ export default function AppLayout() {
         elevation={0}
         sx={{ bgcolor: 'rgba(255,255,255,.9)', backdropFilter: 'blur(8px)', borderBottom: `1px solid ${colors.border}` }}
       >
-        <Toolbar sx={{ gap: 2, minHeight: { xs: 60, sm: 68 }, px: { xs: 2, sm: 3, lg: 4 } }}>
+        {/* 3 columns: logo | nav (true centre) | account */}
+        <Toolbar
+          sx={{
+            display: 'grid',
+            gridTemplateColumns: 'minmax(0,1fr) auto minmax(0,1fr)',
+            alignItems: 'center',
+            gap: { xs: 1, sm: 2 },
+            minHeight: { xs: 60, sm: 68 },
+            px: { xs: 2, sm: 3, lg: 4 },
+          }}
+        >
           <Box
             component={RouterLink}
             to="/documents"
-            sx={{ textDecoration: 'none', display: 'flex', alignItems: 'baseline', gap: 1.25, minWidth: 0 }}
+            sx={{ textDecoration: 'none', display: 'flex', alignItems: 'baseline', gap: 1.25, minWidth: 0, justifySelf: 'start' }}
           >
             <Typography
               component="span"
@@ -80,16 +135,16 @@ export default function AppLayout() {
             </Typography>
           </Box>
 
-          <Box sx={{ flex: 1 }} />
+          <NavTabs />
 
           <ButtonBase
             onClick={(e) => setAnchor(e.currentTarget)}
             aria-label="Account menu"
             aria-haspopup="menu"
-            sx={{ borderRadius: 999, p: 0.5, pr: { xs: 0.5, sm: 1.5 }, gap: 1, '&:hover': { bgcolor: colors.background } }}
+            sx={{ justifySelf: 'end', maxWidth: '100%', minWidth: 0, borderRadius: 999, p: 0.5, pr: { xs: 0.5, sm: 1.5 }, gap: 1, '&:hover': { bgcolor: colors.background } }}
           >
             <Avatar sx={{ width: 34, height: 34, fontSize: 14, fontWeight: 700, background: brandGrad }}>{initials}</Avatar>
-            <Box sx={{ display: { xs: 'none', sm: 'block' }, textAlign: 'left', lineHeight: 1.2 }}>
+            <Box sx={{ display: { xs: 'none', md: 'block' }, textAlign: 'left', lineHeight: 1.2, minWidth: 0, overflow: 'hidden' }}>
               <Typography sx={{ fontSize: 14, fontWeight: 600, color: colors.textDark, lineHeight: 1.2 }}>
                 {user?.name}
               </Typography>

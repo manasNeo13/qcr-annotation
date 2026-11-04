@@ -39,7 +39,21 @@ export default function HistoryPanel({ doc }: { doc: DocumentItem }) {
       {changes.length === 0 ? (
         <Typography sx={{ color: colors.muted }}>No edits yet. Original extracted values are shown above.</Typography>
       ) : (
-        <Box component="ol" sx={{ listStyle: 'none', m: 0, p: 0, position: 'relative' }}>
+        <Box
+          component="ol"
+          aria-label="Edit history"
+          tabIndex={0} // keyboard scrolling
+          sx={{
+            listStyle: 'none',
+            m: 0,
+            // Left/top room so the latest dot's ring isn't clipped; right room for the scrollbar.
+            p: '4px 8px 4px 4px',
+            position: 'relative',
+            maxHeight: { xs: 280, md: 360 },
+            overflowY: 'auto',
+            '&:focus-visible': { outline: `2px solid ${colors.primary}`, outlineOffset: 2, borderRadius: '4px' },
+          }}
+        >
           {changes.map((c, idx) => (
             <Box
               component="li"

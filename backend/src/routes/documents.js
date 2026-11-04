@@ -19,14 +19,27 @@ router.get('/', async (req, res) => {
 
 /** Calendar dots: captures per IST day in [from, to] + latest day with data. */
 router.get('/dates', async (req, res) => {
-  const { from, to } = parse(daysQuerySchema, req.query);
-  res.json(await repo.documents.dayCounts({ from, to }, req.user));
+  const f = parse(daysQuerySchema, req.query);
+  res.json(await repo.documents.dayCounts(f, req.user));
+});
+
+/** Scope dropdown: clients (user-scoped). */
+router.get('/filters', async (req, res) => {
+  res.json(await repo.documents.filterOptions(req.user));
+});
+
+/** Annotation drill-down: EAN groups, then batch groups inside an EAN. */
+router.get('/groups/:by', async (req, res) => {
+  if (!['ean', 'batch'].includes(req.params.by)) throw notFound('Group');
+  const query = parse(listQuerySchema, req.query);
+  const out = await repo.documents.groups(req.params.by, query, req.user);
+  res.json({ ...out, page: query.page, pageSize: query.pageSize });
 });
 
 /** Prev/next within the current list filter. */
 router.get('/:id/neighbors', async (req, res) => {
-  const { q, status, from, to } = parse(listQuerySchema, req.query);
-  const ids = await repo.documents.orderedIds({ q, status, from, to }, req.user);
+  const { page: _p, pageSize: _s, ...filter } = parse(listQuerySchema, req.query);
+  const ids = await repo.documents.orderedIds(filter, req.user);
   const i = ids.indexOf(req.params.id);
   res.json({
     prevId: i > 0 ? ids[i - 1] : null,

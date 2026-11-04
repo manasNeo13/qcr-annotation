@@ -8,11 +8,17 @@
  *   GET   /documents/:id                                                → DocumentItem
  *   GET   /documents/:id/neighbors   ?q&status&from&to                  → Neighbors (prev/next)
  *   PATCH /documents/:id             { metadata }                       → DocumentItem
+ *   GET   /documents/filters                                           → FilterOptions
+ *   GET   /documents/groups/ean|batch  ?…list filter                    → GroupResponse
+ *   List filter also takes client, ean, batch.
  */
 import type {
   DayCounts,
+  DayScope,
   DocMetadata,
   DocumentItem,
+  FilterOptions,
+  GroupResponse,
   ListFilter,
   ListParams,
   ListResponse,
@@ -22,14 +28,19 @@ import type {
 import { request, USE_MOCK } from './client';
 import { mockApi } from './mock';
 
-function filterQs({ q, status, from, to }: ListFilter) {
+function filterQs({ status, ...rest }: ListFilter) {
   const qs = new URLSearchParams();
-  if (q) qs.set('q', q);
   if (status && status !== 'all') qs.set('status', status);
-  if (from) qs.set('from', from);
-  if (to) qs.set('to', to);
+  for (const [k, v] of Object.entries(rest)) if (v) qs.set(k, String(v));
   return qs;
 }
+
+const pagedQs = ({ page, pageSize, ...filter }: ListParams) => {
+  const qs = filterQs(filter);
+  qs.set('page', String(page));
+  qs.set('pageSize', String(pageSize));
+  return qs;
+};
 
 const real = {
   login: (email: string, password: string) =>
@@ -38,14 +49,18 @@ const real = {
       body: JSON.stringify({ email, password }),
     }),
 
-  listDocuments: ({ page, pageSize, ...filter }: ListParams) => {
-    const qs = filterQs(filter);
-    qs.set('page', String(page));
-    qs.set('pageSize', String(pageSize));
-    return request<ListResponse>(`/documents?${qs}`);
-  },
+  listDocuments: (p: ListParams) => request<ListResponse>(`/documents?${pagedQs(p)}`),
 
-  getDays: (from: string, to: string) => request<DayCounts>(`/documents/dates?${new URLSearchParams({ from, to })}`),
+  listGroups: (by: 'ean' | 'batch', p: ListParams) => request<GroupResponse>(`/documents/groups/${by}?${pagedQs(p)}`),
+
+  getFilterOptions: () => request<FilterOptions>('/documents/filters'),
+
+  /** Calendar dots + latest day, narrowed by client when given. */
+  getDays: (from: string, to: string, scope: DayScope = {}) => {
+    const qs = new URLSearchParams({ from, to });
+    for (const [k, v] of Object.entries(scope)) if (v) qs.set(k, v);
+    return request<DayCounts>(`/documents/dates?${qs}`);
+  },
 
   getNeighbors: (id: string, filter: ListFilter) =>
     request<Neighbors>(`/documents/${encodeURIComponent(id)}/neighbors?${filterQs(filter)}`),

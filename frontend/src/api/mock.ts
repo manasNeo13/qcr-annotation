@@ -6,15 +6,20 @@
 import dayjs from 'dayjs';
 import type {
   DayCounts,
+  DayScope,
   ListFilter,
   DocMetadata,
   DocumentItem,
+  FilterOptions,
+  GroupItem,
+  GroupResponse,
   ListParams,
   ListResponse,
   LoginResponse,
   Neighbors,
   StatusFilter,
 } from '../types';
+import { NONE_KEY } from '../types';
 import { getStatus } from '../utils/status';
 import { ApiError } from './client';
 
@@ -121,6 +126,23 @@ const withImage = (d: DocumentItem): DocumentItem => ({
   imageUrl: labelImage(d),
 });
 
+/** Mock EAN = product name. */
+const eanOf = (d: DocumentItem) => d.productName;
+const keyMatch = (v: string, want?: string) => !want || (want === NONE_KEY ? !v : v === want);
+
+function filterDocs({ q = '', from, to, ean, batch }: ListFilter) {
+  const day = (d: DocumentItem) => dayjs(d.updatedAt).format('YYYY-MM-DD');
+  const term = q.trim().toLowerCase();
+  return load()
+    .map(withImage)
+    .filter((d) => !from || (day(d) >= from && day(d) <= (to ?? from)))
+    .filter(
+      (d) =>
+        !term || [d.productName, d.fileName, d.metadata.batchNumber, d.id].some((f) => f.toLowerCase().includes(term)),
+    )
+    .filter((d) => keyMatch(eanOf(d), ean) && keyMatch(d.metadata.batchNumber, batch));
+}
+
 export const mockApi = {
   async login(email: string, password: string): Promise<LoginResponse> {
     await delay(500);
@@ -135,18 +157,9 @@ export const mockApi = {
     };
   },
 
-  async listDocuments({ page, pageSize, q = '', status = 'all', from, to }: ListParams): Promise<ListResponse> {
+  async listDocuments({ page, pageSize, status = 'all', ...f }: ListParams): Promise<ListResponse> {
     await delay();
-    const day = (d: DocumentItem) => dayjs(d.updatedAt).format('YYYY-MM-DD');
-    const all = load()
-      .map(withImage)
-      .filter((d) => !from || (day(d) >= from && day(d) <= (to ?? from)));
-    const term = q.trim().toLowerCase();
-    const searched = term
-      ? all.filter((d) =>
-          [d.productName, d.fileName, d.metadata.batchNumber, d.id].some((f) => f.toLowerCase().includes(term)),
-        )
-      : all;
+    const searched = filterDocs(f);
     const counts: Record<StatusFilter, number> = {
       all: searched.length,
       ok: 0,
@@ -166,7 +179,50 @@ export const mockApi = {
     };
   },
 
-  async getDays(from: string, to: string): Promise<DayCounts> {
+  async listGroups(by: 'ean' | 'batch', { page, pageSize, status = 'all', ...f }: ListParams): Promise<GroupResponse> {
+    await delay();
+    const rows = filterDocs(f);
+    const counts: Record<StatusFilter, number> = { all: rows.length, ok: 0, near_expiry: 0, expired: 0 };
+    rows.forEach((d) => counts[d.status]++);
+    const map = new Map<string, GroupItem & { set: Set<string> }>();
+    for (const d of rows) {
+      if (status !== 'all' && d.status !== status) continue;
+      const key = (by === 'ean' ? eanOf(d) : d.metadata.batchNumber) || NONE_KEY;
+      const g = map.get(key) ?? {
+        key,
+        total: 0,
+        counts: { ok: 0, near_expiry: 0, expired: 0 },
+        latest: null,
+        set: new Set<string>(),
+      };
+      g.total++;
+      g.counts[d.status]++;
+      g.set.add(d.metadata.batchNumber || NONE_KEY);
+      if (!g.latest || d.updatedAt > g.latest) g.latest = d.updatedAt;
+      map.set(key, g);
+    }
+    const byLatest = (a: GroupItem, b: GroupItem) => (b.latest ?? '').localeCompare(a.latest ?? '');
+    const all = [...map.values()].sort((a, b) =>
+      by === 'ean' ? b.set.size - a.set.size || b.total - a.total || byLatest(a, b) : byLatest(a, b),
+    );
+    const start = (page - 1) * pageSize;
+    return {
+      items: all
+        .slice(start, start + pageSize)
+        .map(({ set, ...g }) => ({ ...g, ...(by === 'ean' ? { batches: set.size } : {}) })),
+      total: all.length,
+      page,
+      pageSize,
+      counts,
+    };
+  },
+
+  async getFilterOptions(): Promise<FilterOptions> {
+    return { clients: [] };
+  },
+
+  async getDays(from: string, to: string, _scope?: DayScope): Promise<DayCounts> {
+    void _scope; // mock has no clients
     const days = new Map<string, number>();
     let latest: string | null = null;
     for (const d of load()) {
