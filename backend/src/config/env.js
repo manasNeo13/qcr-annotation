@@ -8,8 +8,16 @@ import crypto from 'node:crypto';
  */
 const MONGODB_URI = process.env.MONGODB_URI || '';
 
+/** "qcr", "/qcr/", "/qcr" → "/qcr"; "", "/" → "" */
+function normalizeBasePath(p = '') {
+  const trimmed = p.trim().replace(/^\/+|\/+$/g, '');
+  return trimmed ? `/${trimmed}` : '';
+}
+
 export const env = {
   PORT: Number(process.env.PORT) || 4000,
+  // URL prefix the app is hosted under, e.g. "/qcr" → neophyte.ril.com/qcr. Empty = served at root.
+  BASE_PATH: normalizeBasePath(process.env.BASE_PATH),
   DATA_SOURCE: MONGODB_URI ? 'mongo' : 'memory',
   MONGODB_URI, // DB name taken from the URI path (e.g. /neo-icr)
   // Random per start → users sign in again after a restart. Optional JWT_SECRET env keeps sessions across restarts.

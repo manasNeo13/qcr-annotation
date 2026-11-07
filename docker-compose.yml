@@ -1,0 +1,13 @@
+services:
+  app:
+    build:
+      context: .
+      args:
+        BASE_PATH: ${BASE_PATH-/qcr}
+    restart: unless-stopped
+    # MONGODB_URI, AZURE_STORAGE_* (optional JWT_SECRET, DNS_SERVERS). Missing file → in-memory demo data.
+    env_file:
+      - path: ./backend/.env
+        required: false
+    ports:
+      - "${APP_PORT:-8080}:4000"
