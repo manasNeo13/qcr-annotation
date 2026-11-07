@@ -22,7 +22,7 @@ import type {
   StatusFilter,
 } from '../types';
 import { NONE_KEY } from '../types';
-import { computeEditStats } from '../utils/editStats';
+import { computeEditStats, editMatch } from '../utils/editStats';
 import { getStatus } from '../utils/status';
 import { ApiError } from './client';
 
@@ -244,8 +244,31 @@ export const mockApi = {
     return computeEditStats(docs, { detail, dayOf: (iso) => dayjs(iso).format('YYYY-MM-DD') });
   },
 
+  /** Stats drill-down. Capture day = createdAt (same as getStats). Newest edit first. */
+  async listEdited({ page, pageSize, status = 'all', q = '', from, to, changed = 'any', editor }: ListParams): Promise<ListResponse> {
+    await delay();
+    const day = (d: DocumentItem) => dayjs(d.createdAt).format('YYYY-MM-DD');
+    const term = q.trim().toLowerCase();
+    const matched = load()
+      .map(withImage)
+      .filter((d) => !from || (day(d) >= from && day(d) <= (to ?? from)))
+      .filter((d) => !term || [d.productName, d.fileName, d.metadata.batchNumber, d.id].some((f) => f.toLowerCase().includes(term)))
+      .flatMap((d) => {
+        const edit = editMatch(d, { changed, editor });
+        return edit ? [{ ...d, edit }] : [];
+      });
+    const counts: Record<StatusFilter, number> = { all: matched.length, ok: 0, near_expiry: 0, expired: 0 };
+    matched.forEach((d) => counts[d.status]++);
+    const rows = (status === 'all' ? matched : matched.filter((d) => d.status === status)).sort(
+      (a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id),
+    );
+    const start = (page - 1) * pageSize;
+    return { items: rows.slice(start, start + pageSize), total: rows.length, page, pageSize, counts };
+  },
+
   async getNeighbors(id: string, filter: ListFilter): Promise<Neighbors> {
-    const { items } = await this.listDocuments({ page: 1, pageSize: 100000, ...filter });
+    const all = { page: 1, pageSize: 100000, ...filter };
+    const { items } = await (filter.changed ? this.listEdited(all) : this.listDocuments(all));
     const i = items.findIndex((d) => d.id === id);
     return {
       prevId: items[i - 1]?.id ?? null,

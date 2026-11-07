@@ -9,7 +9,7 @@
 import dns from 'node:dns';
 import { MongoClient } from 'mongodb';
 import { env } from '../config/env.js';
-import { computeEditStats } from '../lib/editStats.js';
+import { computeEditStats, editedPage } from '../lib/editStats.js';
 import { HttpError } from '../lib/httpError.js';
 import { IST_OFFSET_MS, istWindow } from '../lib/istDay.js';
 import { NEAR_EXPIRY_PCT, startOfToday, toISODate } from '../lib/status.js';
@@ -216,6 +216,18 @@ async function getRow(envId) {
   return row ? toDto(row) : null;
 }
 
+/** Edited captures only (history non-empty) in scope + capture range + search → DTOs. */
+async function editedRows({ from, to, client, q }, user) {
+  const envIds = await scopedEnvIds(user.id, { client });
+  if (!envIds.length) return [];
+  const rows = await col('metadata')
+    .aggregate([...rowStages(envIds, { from, to }), { $match: { 'history.0': { $exists: true } } }, ...searchStage(q)], {
+      allowDiskUse: true,
+    })
+    .toArray();
+  return rows.map(toDto);
+}
+
 // ── Repo ─────────────────────────────────────────────────────────────────
 export const mongoRepo = {
   name: 'mongo',
@@ -388,6 +400,15 @@ export const mongoRepo = {
         .aggregate(rowStages(envIds, { from, to }), { allowDiskUse: true })
         .toArray();
       return computeEditStats(rows.map(toDto), { detail });
+    },
+
+    /** Stats drill-down list: scoped captures in range + search, filtered by edit rules in JS. */
+    async edited(f, user) {
+      return editedPage(await editedRows(f, user), f);
+    },
+
+    async editedIds(f, user) {
+      return editedPage(await editedRows(f, user), { ...f, pageSize: Infinity }).items.map((d) => d.id);
     },
 
     async get(id, user) {

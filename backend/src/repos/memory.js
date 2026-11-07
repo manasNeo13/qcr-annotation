@@ -1,6 +1,6 @@
 /** In-memory repo (DATA_SOURCE=memory). Dev only — resets on restart. No store scoping. */
 import { labelImage, seedDocuments, seedUsers } from '../dev/seed.js';
-import { computeEditStats } from '../lib/editStats.js';
+import { computeEditStats, editedPage } from '../lib/editStats.js';
 import { istDay } from '../lib/istDay.js';
 import { getStatus } from '../lib/status.js';
 import { NONE_KEY } from '../lib/validation.js';
@@ -13,6 +13,16 @@ const toDto = (d) => ({ ...d, imageRef: labelImage(d), status: statusOf(d), hist
 /** Mock EAN = product name (memory mode has no real EANs). */
 const eanOf = (d) => d.productName;
 const keyMatch = (v, want) => !want || (want === NONE_KEY ? !v : v === want);
+
+/** Capture day (createdAt, IST) in [from, to] + search — edit stats scope. */
+function capturedIn({ q = '', from, to }) {
+  const term = q.toLowerCase();
+  return docs.filter((d) => {
+    const day = istDay(new Date(d.createdAt));
+    if (from && (day < from || day > to)) return false;
+    return !term || [d.productName, d.fileName, d.metadata.batchNumber, d.id].some((f) => f.toLowerCase().includes(term));
+  });
+}
 
 function filterDocs({ q = '', from, to, ean, batch }) {
   const term = q.toLowerCase();
@@ -100,11 +110,16 @@ export const memoryRepo = {
 
     /** Capture day = createdAt (IST). */
     async editStats({ from, to, detail }) {
-      const inRange = (d) => {
-        const day = istDay(new Date(d.createdAt));
-        return !from || (day >= from && day <= to);
-      };
-      return computeEditStats(docs.filter(inRange).map(toDto), { detail });
+      return computeEditStats(capturedIn({ from, to }).map(toDto), { detail });
+    },
+
+    /** Stats drill-down list (see lib/editStats editedPage). */
+    async edited(f) {
+      return editedPage(capturedIn(f).map(toDto), f);
+    },
+
+    async editedIds(f) {
+      return editedPage(capturedIn(f).map(toDto), { ...f, pageSize: Infinity }).items.map((d) => d.id);
     },
 
     async get(id) {

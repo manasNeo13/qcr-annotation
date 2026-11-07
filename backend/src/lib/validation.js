@@ -58,6 +58,17 @@ const listBase = z.object({
 });
 export const listQuerySchema = withRange(listBase);
 
+/** Edit-stats drill-down: changed field ('any' = any field) + optional annotator. */
+const EDIT_KEYS = ['batch', 'mrp', 'mfd', 'expiry', 'any'];
+const editBase = listBase.extend({
+  changed: z.enum(EDIT_KEYS),
+  editor: z.string().trim().max(200).optional(),
+});
+export const editedQuerySchema = withRange(editBase);
+
+/** Prev/next: list filter, or edited filter when `changed` present. */
+export const neighborsQuerySchema = withRange(editBase.partial({ changed: true }));
+
 /** Sentinel for "no EAN" / "no batch" groups. */
 export const NONE_KEY = '__none__';
 

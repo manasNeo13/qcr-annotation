@@ -1,6 +1,13 @@
 import { Router } from 'express';
 import { notFound } from '../lib/httpError.js';
-import { daysQuerySchema, listQuerySchema, parse, statsQuerySchema, updateBodySchema } from '../lib/validation.js';
+import {
+  daysQuerySchema,
+  editedQuerySchema,
+  listQuerySchema,
+  neighborsQuerySchema,
+  parse, statsQuerySchema,
+  updateBodySchema,
+} from '../lib/validation.js';
 import { requireAuth } from '../middleware/auth.js';
 import { repo } from '../repos/index.js';
 import { signBlobUrl } from '../services/sas.js';
@@ -34,6 +41,16 @@ router.get('/stats', async (req, res) => {
   res.json(await repo.documents.editStats(f, req.user));
 });
 
+/**
+ * Edit stats drill-down: captures (capture day in range) where `changed` field was edited,
+ * optionally by `editor`. Same rules as /stats → counts match. Items carry `edit` (original, changed, editors).
+ */
+router.get('/edited', async (req, res) => {
+  const query = parse(editedQuerySchema, req.query);
+  const { items, total, counts } = await repo.documents.edited(query, req.user);
+  res.json({ items: items.map(present), total, page: query.page, pageSize: query.pageSize, counts });
+});
+
 /** Annotation drill-down: EAN groups, then batch groups inside an EAN. */
 router.get('/groups/:by', async (req, res) => {
   if (!['ean', 'batch'].includes(req.params.by)) throw notFound('Group');
@@ -44,8 +61,10 @@ router.get('/groups/:by', async (req, res) => {
 
 /** Prev/next within the current list filter. */
 router.get('/:id/neighbors', async (req, res) => {
-  const { page: _p, pageSize: _s, ...filter } = parse(listQuerySchema, req.query);
-  const ids = await repo.documents.orderedIds(filter, req.user);
+  const { page: _p, pageSize: _s, ...filter } = parse(neighborsQuerySchema, req.query);
+  const ids = filter.changed
+    ? await repo.documents.editedIds(filter, req.user)
+    : await repo.documents.orderedIds(filter, req.user);
   const i = ids.indexOf(req.params.id);
   res.json({
     prevId: i > 0 ? ids[i - 1] : null,

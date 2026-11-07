@@ -11,6 +11,8 @@
  *   GET   /documents/filters                                           → FilterOptions
  *   GET   /documents/groups/ean|batch  ?…list filter                    → GroupResponse
  *   GET   /documents/stats           ?from&to&client&detail=1           → EditStats
+ *   GET   /documents/edited          ?changed&editor&…list filter       → ListResponse (items carry `edit`)
+ *   Neighbors with `changed` → prev/next inside the edited list.
  *   List filter also takes client, ean, batch.
  */
 import type {
@@ -53,6 +55,9 @@ const real = {
     }),
 
   listDocuments: (p: ListParams) => request<ListResponse>(`/documents?${pagedQs(p)}`),
+
+  /** Edit-stats drill-down. p.changed required. */
+  listEdited: (p: ListParams) => request<ListResponse>(`/documents/edited?${pagedQs(p)}`),
 
   listGroups: (by: 'ean' | 'batch', p: ListParams) => request<GroupResponse>(`/documents/groups/${by}?${pagedQs(p)}`),
 

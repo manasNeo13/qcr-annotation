@@ -8,6 +8,8 @@ import type {
   DocMetadata,
   DocumentItem,
   EditField,
+  EditInfo,
+  EditKey,
   EditStats,
   FieldCounts,
   StatsRow,
@@ -35,6 +37,34 @@ const add = (c: FieldCounts, keys: EditField[]) => {
   keys.forEach((k) => c[k]++);
   if (keys.length) c.any++;
 };
+
+/** Fields each editor changed across their saves (a later revert still counts). */
+function fieldsByEditor(d: DocumentItem) {
+  const h = d.history;
+  const states = [...h.map((x) => x.metadata), d.metadata];
+  const m = new Map<string, Set<EditField>>();
+  h.forEach((_, i) => {
+    const editor = (i + 1 < h.length ? h[i + 1].editedBy : d.updatedBy) || 'Unknown';
+    const cur = m.get(editor) ?? new Set<EditField>();
+    diff(states[i], states[i + 1]).forEach((f) => cur.add(f));
+    m.set(editor, cur);
+  });
+  return m;
+}
+
+/** Stats drill-down predicate (mirrors backend editMatch). null = no match. */
+export function editMatch(d: DocumentItem, { changed, editor }: { changed: EditKey; editor?: string }): EditInfo | null {
+  const hit = (keys: EditField[]) => (changed === 'any' ? keys.length > 0 : keys.includes(changed));
+  const original = d.history[0]?.metadata ?? d.metadata;
+  const fields = diff(original, d.metadata);
+  const byEditor = fieldsByEditor(d);
+  const ok = editor ? hit([...(byEditor.get(editor) ?? [])]) : hit(fields);
+  return ok ? { original, changed: fields, editors: [...byEditor.keys()] } : null;
+}
+
+/** Chip label: "Batch edited · by Ravi". */
+export const editLabel = (changed: EditKey, editor?: string) =>
+  `${changed === 'any' ? 'Any field' : FIELD_LABELS[changed]} edited${editor ? ` · by ${editor}` : ''}`;
 
 /** % with 2 decimals, '0.00%' when no images. */
 export const pct = (n: number, total: number) => `${total ? ((n / total) * 100).toFixed(2) : '0.00'}%`;

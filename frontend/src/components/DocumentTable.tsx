@@ -19,9 +19,10 @@ import {
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import InboxIcon from '@mui/icons-material/InboxOutlined';
 import StatusChip from './StatusChip';
-import type { DocumentItem, ListResponse } from '../types';
+import type { DocMetadata, DocumentItem, EditField, ListResponse } from '../types';
 import { formatDate, formatDateTime, formatMRP } from '../utils/format';
 import { colors } from '../theme';
+import { FIELD_LABELS as EDIT_LABEL } from '../utils/editStats';
 
 interface Props {
   data?: ListResponse;
@@ -36,6 +37,31 @@ interface Props {
   onOpen: (id: string) => void;
   /** Buttons shown in empty state. */
   emptyActions?: ReactNode;
+  /** Edit drill-down: show original value (struck) above changed values + who edited. */
+  showEdits?: boolean;
+}
+
+const SHOW: Record<EditField, (m: DocMetadata) => string> = {
+  batch: (m) => m.batchNumber || '—',
+  mfd: (m) => formatDate(m.mfgDate),
+  expiry: (m) => formatDate(m.expiryDate),
+  mrp: (m) => formatMRP(m.mrp),
+};
+
+/** Current value; if edited (and showEdits), original OCR value struck through above it. */
+function Val({ doc, field, show }: { doc: DocumentItem; field: EditField; show?: boolean }) {
+  const now = SHOW[field](doc.metadata);
+  if (!show || !doc.edit?.changed.includes(field)) return <>{now}</>;
+  return (
+    <>
+      <Box component="span" sx={{ display: 'block', fontSize: 11.5, color: colors.muted, textDecoration: 'line-through' }}>
+        {SHOW[field](doc.edit.original)}
+      </Box>
+      <Box component="span" sx={{ color: colors.brandDark, fontWeight: 700 }}>
+        {now}
+      </Box>
+    </>
+  );
 }
 
 /** Capture list: table on desktop, cards on mobile, with pagination. */
@@ -51,6 +77,7 @@ export default function DocumentTable({
   onPage,
   onOpen,
   emptyActions,
+  showEdits,
 }: Props) {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
@@ -122,6 +149,22 @@ export default function DocumentTable({
                       <Typography sx={{ fontSize: 12, color: colors.muted }} noWrap>
                         Batch {doc.metadata.batchNumber || '—'}
                       </Typography>
+                      {showEdits && doc.edit && (
+                        <Box sx={{ mt: 0.5, fontSize: 12, color: colors.textPrimary }}>
+                          {doc.edit.changed.map((f) => (
+                            <Box key={f}>
+                              <b>{EDIT_LABEL[f]}</b>{' '}
+                              <Box component="span" sx={{ textDecoration: 'line-through', color: colors.muted }}>
+                                {SHOW[f](doc.edit!.original)}
+                              </Box>{' '}
+                              → <Box component="span" sx={{ color: colors.brandDark, fontWeight: 700 }}>{SHOW[f](doc.metadata)}</Box>
+                            </Box>
+                          ))}
+                          {doc.edit.editors.length > 0 && (
+                            <Box sx={{ color: colors.muted }}>by {doc.edit.editors.join(', ')}</Box>
+                          )}
+                        </Box>
+                      )}
                       <Box
                         sx={{
                           mt: 0.5,
@@ -193,12 +236,16 @@ export default function DocumentTable({
                         {doc.productName}
                       </TableCell>
                       <TableCell sx={{ fontFamily: 'ui-monospace, monospace', fontSize: 13 }}>
-                        {doc.metadata.batchNumber || '—'}
+                        <Val doc={doc} field="batch" show={showEdits} />
                       </TableCell>
-                      <TableCell sx={{ whiteSpace: 'nowrap' }}>{formatDate(doc.metadata.mfgDate)}</TableCell>
-                      <TableCell sx={{ whiteSpace: 'nowrap' }}>{formatDate(doc.metadata.expiryDate)}</TableCell>
+                      <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                        <Val doc={doc} field="mfd" show={showEdits} />
+                      </TableCell>
+                      <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                        <Val doc={doc} field="expiry" show={showEdits} />
+                      </TableCell>
                       <TableCell align="right" sx={{ fontWeight: 600, whiteSpace: 'nowrap' }}>
-                        {formatMRP(doc.metadata.mrp)}
+                        <Val doc={doc} field="mrp" show={showEdits} />
                       </TableCell>
                       <TableCell>
                         <StatusChip status={doc.status} />
@@ -212,10 +259,16 @@ export default function DocumentTable({
                         }}
                       >
                         {formatDateTime(doc.updatedAt)}
-                        {doc.version > 1 && (
+                        {showEdits && doc.edit?.editors.length ? (
                           <Box component="span" sx={{ display: 'block', fontSize: 11, color: colors.brandDark }}>
-                            Edited · v{doc.version}
+                            by {doc.edit.editors.join(', ')}
                           </Box>
+                        ) : (
+                          doc.version > 1 && (
+                            <Box component="span" sx={{ display: 'block', fontSize: 11, color: colors.brandDark }}>
+                              Edited · v{doc.version}
+                            </Box>
+                          )
                         )}
                       </TableCell>
                       <TableCell>

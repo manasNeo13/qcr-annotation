@@ -15,7 +15,7 @@ import ImageViewer from '../components/ImageViewer';
 import MetadataForm from '../components/MetadataForm';
 import StatusChip from '../components/StatusChip';
 import PageBreadcrumbs, { type Crumb } from '../components/PageBreadcrumbs';
-import { readFilter } from '../hooks/useListState';
+import { readFilter, statsPath } from '../hooks/useListState';
 import type { DocMetadata, DocumentItem } from '../types';
 import { annotationPath, batchLabel, eanLabel } from '../utils/annotation';
 import { formatDate, formatDateTime, formatMRP } from '../utils/format';
@@ -83,7 +83,11 @@ function DocumentDetail({ id }: { id: string }) {
         { label: `Batch ${batchLabel(batch!)}`, to: backTo },
         { label: 'Capture' },
       ]
-    : [{ label: 'Filter Table', to: backTo }, { label: 'Capture' }];
+    : [
+        ...(filter.changed ? [{ label: 'Edit Stats', to: statsPath(listParams) }] : []),
+        { label: 'Filter Table', to: backTo },
+        { label: 'Capture' },
+      ];
   const qc = useQueryClient();
   const { user } = useAuth();
   const [editing, setEditing] = useState(false);
@@ -107,6 +111,7 @@ function DocumentDetail({ id }: { id: string }) {
       qc.setQueryData(['document', id], updated);
       qc.invalidateQueries({ queryKey: ['documents'] });
       qc.invalidateQueries({ queryKey: ['groups'] });
+      qc.invalidateQueries({ queryKey: ['edit-stats'] });
       setEditing(false);
       setDirty(false);
       toast.success('Metadata updated');

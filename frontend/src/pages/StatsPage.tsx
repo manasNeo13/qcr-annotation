@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link as RouterLink } from 'react-router-dom';
 import { keepPreviousData, useQuery } from '@tanstack/react-query';
 import {
   Alert,
@@ -22,8 +23,8 @@ import DateRangeFilter from '../components/DateRangeFilter';
 import ExportStatsDialog from '../components/ExportStatsDialog';
 import { ScopeFilters } from '../components/ListToolbar';
 import PageBreadcrumbs from '../components/PageBreadcrumbs';
-import { useListState } from '../hooks/useListState';
-import type { EditField, FieldCounts, StatsFilter } from '../types';
+import { carryParams, useListState } from '../hooks/useListState';
+import type { EditField, EditKey, FieldCounts, StatsFilter } from '../types';
 import { colors } from '../theme';
 import { formatDate, rangeLabel } from '../utils/format';
 import { EDIT_FIELDS, FIELD_LABELS, pct } from '../utils/editStats';
@@ -31,11 +32,40 @@ import { EDIT_FIELDS, FIELD_LABELS, pct } from '../utils/editStats';
 const COLS: (EditField | 'any')[] = [...EDIT_FIELDS, 'any'];
 const colLabel = (k: EditField | 'any') => (k === 'any' ? 'Any change' : FIELD_LABELS[k]);
 
-/** One KPI tile: % big, count + bar below. */
-function Tile({ label, n, total, strong }: { label: string; n: number; total: number; strong?: boolean }) {
+/** Drill-down target: Filter Table of images where `changed` was edited (optionally by editor / on day). */
+type LinkFor = (changed: EditKey) => string;
+function drillLink(params: URLSearchParams, { day, editor }: { day?: string; editor?: string } = {}): LinkFor {
+  return (changed) => {
+    const qs = carryParams(params, ['q', 'status', 'changed', 'editor']);
+    if (day) {
+      qs.set('from', day);
+      qs.delete('to');
+      qs.delete('all');
+    } else if (!qs.get('from')) qs.set('all', '1'); // stats over all dates → list too (skip default day)
+    qs.set('changed', changed);
+    if (editor) qs.set('editor', editor);
+    return `/documents?${qs}`;
+  };
+}
+
+const linkSx = {
+  display: 'block',
+  textDecoration: 'none',
+  color: 'inherit',
+  borderRadius: '6px',
+  transition: 'background .15s',
+  '&:hover, &:focus-visible': { bgcolor: colors.surface2 },
+  '&:hover .nq-pct, &:focus-visible .nq-pct': { color: colors.brandDark, textDecoration: 'underline' },
+};
+
+/** One KPI tile: % big, count + bar below. Click → drill-down (when any). */
+function Tile({ label, n, total, strong, to }: { label: string; n: number; total: number; strong?: boolean; to?: string }) {
   const share = total ? n / total : 0;
+  const clickable = !!to && n > 0;
+  const link = clickable ? { component: RouterLink, to, 'aria-label': `View ${n} images: ${label} changed` } : {};
   return (
     <Paper
+      {...link}
       sx={{
         p: 2,
         flex: '1 1 150px',
@@ -43,12 +73,23 @@ function Tile({ label, n, total, strong }: { label: string; n: number; total: nu
         border: `1px solid ${strong ? colors.brand100 : colors.border}`,
         bgcolor: strong ? colors.brandSoft : colors.paper,
         boxShadow: 'none',
+        textDecoration: 'none',
+        ...(clickable
+          ? {
+              transition: 'border-color .15s, box-shadow .15s',
+              '&:hover, &:focus-visible': { borderColor: colors.primary, boxShadow: `0 0 0 1px ${colors.primary}` },
+              '&:hover .nq-pct, &:focus-visible .nq-pct': { color: colors.brandDark },
+            }
+          : {}),
       }}
     >
       <Typography sx={{ fontWeight: 700, color: strong ? colors.brandDark : colors.muted, fontSize: 13 }}>
         {label}
       </Typography>
-      <Typography sx={{ fontSize: 28, fontWeight: 700, color: colors.textDark, lineHeight: 1.2, mt: 0.5 }}>
+      <Typography
+        className="nq-pct"
+        sx={{ fontSize: 28, fontWeight: 700, color: colors.textDark, lineHeight: 1.2, mt: 0.5 }}
+      >
         {pct(n, total)}
       </Typography>
       <Typography sx={{ fontSize: 12.5, color: colors.muted }}>
@@ -61,23 +102,35 @@ function Tile({ label, n, total, strong }: { label: string; n: number; total: nu
   );
 }
 
-/** "35.78%" with muted count under it. */
-function PctCell({ n, total, strong }: { n: number; total: number; strong?: boolean }) {
-  return (
-    <TableCell align="right" sx={strong ? { bgcolor: colors.brandSoft } : undefined}>
-      <Typography sx={{ fontWeight: strong ? 700 : 600, color: colors.textDark, lineHeight: 1.3 }}>
+/** "35.78%" with muted count under it. Click → drill-down (when any). */
+function PctCell({ n, total, strong, to }: { n: number; total: number; strong?: boolean; to?: string }) {
+  const clickable = !!to && n > 0;
+  const body = (
+    <>
+      <Typography className="nq-pct" sx={{ fontWeight: strong ? 700 : 600, color: colors.textDark, lineHeight: 1.3 }}>
         {pct(n, total)}
       </Typography>
       <Typography sx={{ fontSize: 12, color: colors.muted, lineHeight: 1.3 }}>{n}</Typography>
+    </>
+  );
+  return (
+    <TableCell align="right" sx={{ ...(strong ? { bgcolor: colors.brandSoft } : {}), ...(clickable ? { p: 0.5 } : {}) }}>
+      {clickable ? (
+        <Box component={RouterLink} to={to} aria-label={`View ${n} images`} sx={{ ...linkSx, px: 1.5, py: 0.5 }}>
+          {body}
+        </Box>
+      ) : (
+        body
+      )}
     </TableCell>
   );
 }
 
-function CountCells({ c, total }: { c: FieldCounts; total: number }) {
+function CountCells({ c, total, linkFor }: { c: FieldCounts; total: number; linkFor: LinkFor }) {
   return (
     <>
       {COLS.map((k) => (
-        <PctCell key={k} n={c[k]} total={total} strong={k === 'any'} />
+        <PctCell key={k} n={c[k]} total={total} strong={k === 'any'} to={linkFor(k)} />
       ))}
     </>
   );
@@ -108,7 +161,7 @@ const HeadCols = () => (
 /** Edit stats: how often annotators corrected OCR values. Capture day (IST), all images = denominator. */
 export default function StatsPage() {
   const state = useListState();
-  const { filter, latest, needDefaultDate, setRange } = state;
+  const { params, filter, latest, needDefaultDate, setRange } = state;
   const sf: StatsFilter = { from: filter.from, to: filter.to, client: filter.client };
   const [exportOpen, setExportOpen] = useState(false);
 
@@ -189,9 +242,9 @@ export default function StatsPage() {
             </Box>
             <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1.5 }}>
               {EDIT_FIELDS.map((k) => (
-                <Tile key={k} label={FIELD_LABELS[k]} n={data.changed[k]} total={total} />
+                <Tile key={k} label={FIELD_LABELS[k]} n={data.changed[k]} total={total} to={drillLink(params)(k)} />
               ))}
-              <Tile label="Any change" n={data.changed.any} total={total} strong />
+              <Tile label="Any change" n={data.changed.any} total={total} strong to={drillLink(params)('any')} />
             </Box>
 
             <Section title="By annotator" hint="% of images each person handled where they changed that field">
@@ -217,7 +270,7 @@ export default function StatsPage() {
                           {a.name}
                         </TableCell>
                         <TableCell align="right">{a.images}</TableCell>
-                        <CountCells c={a.changed} total={a.images} />
+                        <CountCells c={a.changed} total={a.images} linkFor={drillLink(params, { editor: a.name })} />
                       </TableRow>
                     ))
                   )}
@@ -242,7 +295,7 @@ export default function StatsPage() {
                           {formatDate(d.date)}
                         </TableCell>
                         <TableCell align="right">{d.total}</TableCell>
-                        <CountCells c={d.changed} total={d.total} />
+                        <CountCells c={d.changed} total={d.total} linkFor={drillLink(params, { day: d.date })} />
                       </TableRow>
                     ))}
                   </TableBody>

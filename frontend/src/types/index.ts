@@ -30,6 +30,15 @@ export interface DocumentItem {
   ean?: string;
   /** Previous versions, oldest first. history[0] = original values. */
   history: HistoryEntry[];
+  /** Only on /documents/edited rows. */
+  edit?: EditInfo;
+}
+
+/** Edit drill-down row info: original OCR values, fields changed (original ≠ final), who saved. */
+export interface EditInfo {
+  original: DocMetadata;
+  changed: EditField[];
+  editors: string[];
 }
 
 export interface ListParams {
@@ -45,6 +54,9 @@ export interface ListParams {
   /** Drill-down. NONE_KEY = missing value. */
   ean?: string;
   batch?: string;
+  /** Edit-stats drill-down: field changed ('any' = any field), optionally by this annotator. */
+  changed?: EditKey;
+  editor?: string;
 }
 
 export type ListFilter = Omit<ListParams, 'page' | 'pageSize'>;
@@ -110,7 +122,8 @@ export interface Neighbors {
 
 /** Edit stats fields (OCR value changed by an annotator). */
 export type EditField = 'batch' | 'mrp' | 'mfd' | 'expiry';
-export type FieldCounts = Record<EditField | 'any', number>;
+export type EditKey = EditField | 'any';
+export type FieldCounts = Record<EditKey, number>;
 
 export interface StatsFilter {
   /** IST capture day range. Omitted = all dates. */

@@ -39,6 +39,47 @@ function saves(doc) {
   }));
 }
 
+/** Per-editor changed fields across their saves (a later revert still counts). */
+function fieldsByEditor(list) {
+  const m = new Map();
+  for (const s of list) {
+    const cur = m.get(s.editor) ?? new Set();
+    s.fields.forEach((f) => cur.add(f));
+    m.set(s.editor, cur);
+  }
+  return m;
+}
+
+/**
+ * Stats drill-down predicate. Same rules as computeEditStats so table counts = stat counts.
+ * changed = field key | 'any'. editor set → that annotator changed it; else original ≠ current.
+ * Returns null (no match) or { original, changed, editors }.
+ */
+export function editMatch(doc, { changed, editor }) {
+  const hit = (keys) => (changed === 'any' ? keys.length > 0 : keys.includes(changed));
+  const original = doc.history?.[0]?.metadata ?? doc.metadata;
+  const fields = diffFields(original, doc.metadata);
+  const byEditor = fieldsByEditor(saves(doc));
+  const ok = editor ? hit([...(byEditor.get(editor) ?? [])]) : hit(fields);
+  return ok ? { original, changed: fields, editors: [...byEditor.keys()] } : null;
+}
+
+/** Filter + count + sort (last edit, newest first) + paginate. docs = DTOs in capture range. */
+export function editedPage(docs, { changed, editor, status = 'all', page = 1, pageSize = Infinity }) {
+  const matched = [];
+  for (const d of docs) {
+    const edit = editMatch(d, { changed, editor });
+    if (edit) matched.push({ ...d, edit });
+  }
+  const counts = { all: matched.length, ok: 0, near_expiry: 0, expired: 0 };
+  for (const d of matched) counts[d.status]++;
+  const rows = (status === 'all' ? matched : matched.filter((d) => d.status === status)).sort(
+    (a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id),
+  );
+  const items = Number.isFinite(pageSize) ? rows.slice((page - 1) * pageSize, page * pageSize) : rows;
+  return { items, total: rows.length, counts };
+}
+
 /**
  * docs → { total, changed, byDay, annotators, rows? }.
  * annotators[].changed = images where THEY changed a field (a later revert still counts).
