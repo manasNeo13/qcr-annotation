@@ -61,6 +61,14 @@ export const listQuerySchema = withRange(listBase);
 /** Sentinel for "no EAN" / "no batch" groups. */
 export const NONE_KEY = '__none__';
 
+/** Edit stats: capture-day range (omitted = all dates) + client. detail=1 → per-image rows (CSV). */
+export const statsQuerySchema = withRange(
+  z.object({
+    client: z.string().trim().max(100).optional(),
+    detail: z.enum(['0', '1']).optional().transform((v) => v === '1'),
+  }),
+);
+
 export const daysQuerySchema = z.object({
   from: day,
   to: day,

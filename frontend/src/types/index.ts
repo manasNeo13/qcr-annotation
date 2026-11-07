@@ -107,3 +107,50 @@ export interface Neighbors {
   index: number;
   total: number;
 }
+
+/** Edit stats fields (OCR value changed by an annotator). */
+export type EditField = 'batch' | 'mrp' | 'mfd' | 'expiry';
+export type FieldCounts = Record<EditField | 'any', number>;
+
+export interface StatsFilter {
+  /** IST capture day range. Omitted = all dates. */
+  from?: string;
+  to?: string;
+  client?: string;
+}
+
+export interface DayStats {
+  date: string;
+  total: number;
+  changed: FieldCounts;
+}
+
+export interface AnnotatorStats {
+  name: string;
+  /** Images handled = saved at least once by this annotator. */
+  images: number;
+  saves: number;
+  /** Images where THEY changed the field. */
+  changed: FieldCounts;
+}
+
+/** Per-image row (CSV detail). */
+export interface StatsRow {
+  id: string;
+  captureDay: string;
+  ean: string;
+  original: DocMetadata;
+  final: DocMetadata;
+  changed: EditField[];
+  editors: string[];
+  saves: number;
+  lastEditedAt: string | null;
+}
+
+export interface EditStats {
+  total: number;
+  changed: FieldCounts;
+  byDay: DayStats[];
+  annotators: AnnotatorStats[];
+  rows?: StatsRow[];
+}

@@ -1,5 +1,6 @@
 /** In-memory repo (DATA_SOURCE=memory). Dev only — resets on restart. No store scoping. */
 import { labelImage, seedDocuments, seedUsers } from '../dev/seed.js';
+import { computeEditStats } from '../lib/editStats.js';
 import { istDay } from '../lib/istDay.js';
 import { getStatus } from '../lib/status.js';
 import { NONE_KEY } from '../lib/validation.js';
@@ -95,6 +96,15 @@ export const memoryRepo = {
         counts,
         items: all.slice(start, start + pageSize).map(({ batchSet, ...g }) => ({ ...g, ...(by === 'ean' ? { batches: batchSet.size } : {}) })),
       };
+    },
+
+    /** Capture day = createdAt (IST). */
+    async editStats({ from, to, detail }) {
+      const inRange = (d) => {
+        const day = istDay(new Date(d.createdAt));
+        return !from || (day >= from && day <= to);
+      };
+      return computeEditStats(docs.filter(inRange).map(toDto), { detail });
     },
 
     async get(id) {

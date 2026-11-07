@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { notFound } from '../lib/httpError.js';
-import { daysQuerySchema, listQuerySchema, parse, updateBodySchema } from '../lib/validation.js';
+import { daysQuerySchema, listQuerySchema, parse, statsQuerySchema, updateBodySchema } from '../lib/validation.js';
 import { requireAuth } from '../middleware/auth.js';
 import { repo } from '../repos/index.js';
 import { signBlobUrl } from '../services/sas.js';
@@ -26,6 +26,12 @@ router.get('/dates', async (req, res) => {
 /** Scope dropdown: clients (user-scoped). */
 router.get('/filters', async (req, res) => {
   res.json(await repo.documents.filterOptions(req.user));
+});
+
+/** Edit stats: OCR values changed by annotators, per field / day / annotator (capture day, IST). */
+router.get('/stats', async (req, res) => {
+  const f = parse(statsQuerySchema, req.query);
+  res.json(await repo.documents.editStats(f, req.user));
 });
 
 /** Annotation drill-down: EAN groups, then batch groups inside an EAN. */

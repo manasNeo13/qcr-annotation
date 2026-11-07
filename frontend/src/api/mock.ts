@@ -10,6 +10,7 @@ import type {
   ListFilter,
   DocMetadata,
   DocumentItem,
+  EditStats,
   FilterOptions,
   GroupItem,
   GroupResponse,
@@ -17,9 +18,11 @@ import type {
   ListResponse,
   LoginResponse,
   Neighbors,
+  StatsFilter,
   StatusFilter,
 } from '../types';
 import { NONE_KEY } from '../types';
+import { computeEditStats } from '../utils/editStats';
 import { getStatus } from '../utils/status';
 import { ApiError } from './client';
 
@@ -231,6 +234,14 @@ export const mockApi = {
       if (day >= from && day <= to) days.set(day, (days.get(day) ?? 0) + 1);
     }
     return { days: [...days].sort().map(([date, count]) => ({ date, count })), latest };
+  },
+
+  /** Capture day = createdAt. Mock has no clients. */
+  async getStats({ from, to }: StatsFilter, detail = false): Promise<EditStats> {
+    await delay();
+    const day = (d: DocumentItem) => dayjs(d.createdAt).format('YYYY-MM-DD');
+    const docs = load().filter((d) => !from || (day(d) >= from && day(d) <= (to ?? from)));
+    return computeEditStats(docs, { detail, dayOf: (iso) => dayjs(iso).format('YYYY-MM-DD') });
   },
 
   async getNeighbors(id: string, filter: ListFilter): Promise<Neighbors> {

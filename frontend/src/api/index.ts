@@ -10,6 +10,7 @@
  *   PATCH /documents/:id             { metadata }                       → DocumentItem
  *   GET   /documents/filters                                           → FilterOptions
  *   GET   /documents/groups/ean|batch  ?…list filter                    → GroupResponse
+ *   GET   /documents/stats           ?from&to&client&detail=1           → EditStats
  *   List filter also takes client, ean, batch.
  */
 import type {
@@ -17,6 +18,7 @@ import type {
   DayScope,
   DocMetadata,
   DocumentItem,
+  EditStats,
   FilterOptions,
   GroupResponse,
   ListFilter,
@@ -24,6 +26,7 @@ import type {
   ListResponse,
   LoginResponse,
   Neighbors,
+  StatsFilter,
 } from '../types';
 import { request, USE_MOCK } from './client';
 import { mockApi } from './mock';
@@ -60,6 +63,14 @@ const real = {
     const qs = new URLSearchParams({ from, to });
     for (const [k, v] of Object.entries(scope)) if (v) qs.set(k, v);
     return request<DayCounts>(`/documents/dates?${qs}`);
+  },
+
+  /** detail = include per-image rows (CSV export). */
+  getStats: (f: StatsFilter, detail = false) => {
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(f)) if (v) qs.set(k, v);
+    if (detail) qs.set('detail', '1');
+    return request<EditStats>(`/documents/stats?${qs}`);
   },
 
   getNeighbors: (id: string, filter: ListFilter) =>

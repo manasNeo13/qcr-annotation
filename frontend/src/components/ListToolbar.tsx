@@ -138,7 +138,7 @@ function ScopeButton({ scope }: { scope: ReturnType<typeof useScope> }) {
   );
 }
 
-function ScopeFilters({ state }: { state: ListState }) {
+export function ScopeFilters({ state }: { state: ListState }) {
   const scope = useScope(state);
   return (
     <>

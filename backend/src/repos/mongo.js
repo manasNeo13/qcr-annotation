@@ -9,6 +9,7 @@
 import dns from 'node:dns';
 import { MongoClient } from 'mongodb';
 import { env } from '../config/env.js';
+import { computeEditStats } from '../lib/editStats.js';
 import { HttpError } from '../lib/httpError.js';
 import { IST_OFFSET_MS, istWindow } from '../lib/istDay.js';
 import { NEAR_EXPIRY_PCT, startOfToday, toISODate } from '../lib/status.js';
@@ -377,6 +378,16 @@ export const mongoRepo = {
           latest: iso(x.latest)?.toISOString() ?? null,
         })),
       };
+    },
+
+    /** Edit stats over scoped captures in [from, to] (capture day). */
+    async editStats({ from, to, client, detail }, user) {
+      const envIds = await scopedEnvIds(user.id, { client });
+      if (!envIds.length) return computeEditStats([], { detail });
+      const rows = await col('metadata')
+        .aggregate(rowStages(envIds, { from, to }), { allowDiskUse: true })
+        .toArray();
+      return computeEditStats(rows.map(toDto), { detail });
     },
 
     async get(id, user) {
