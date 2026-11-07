@@ -1,4 +1,4 @@
-export const API_URL = import.meta.env.VITE_API_URL || '/api';
+export const API_URL = import.meta.env.VITE_API_URL || `${import.meta.env.BASE_URL}api`; // BASE_URL = Vite `base`, e.g. "/qcr/"
 export const USE_MOCK = import.meta.env.VITE_USE_MOCK === 'true'; // opt-in: in-browser mock, no backend
 
 export const AUTH_STORAGE_KEY = 'qcr.auth';

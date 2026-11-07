@@ -15,6 +15,20 @@ cd frontend && npm install && npm run dev
 cd backend  && cp .env.example .env && npm install && npm run dev
 ```
 
+### Docker
+
+```bash
+cp backend/.env.example backend/.env   # optional; without it → in-memory demo data
+docker compose up -d --build           # app on http://localhost:8080/qcr/ (override with APP_PORT=...)
+```
+
+**Context path:** the app is hosted at `neophyte.ril.com/qcr`, so compose builds with `BASE_PATH=/qcr` (UI at `/qcr/`, API at `/qcr/api`).
+Serve at root instead: `BASE_PATH= docker compose up -d --build`. It's a build arg (baked into the frontend), so rebuild after changing it.
+Local dev: set `BASE_PATH=/qcr` in both `backend/.env` and `frontend/.env` (or leave unset for root).
+
+Single image (root `Dockerfile`): the frontend is built, then served by the Express backend (`STATIC_DIR`) next to `/api`.
+Without compose: `docker build -t qcr-annotation . && docker run -p 8080:4000 --env-file backend/.env qcr-annotation`.
+
 Config: only `backend/.env` — `MONGODB_URI`, `AZURE_STORAGE_ACCOUNT`, `AZURE_STORAGE_KEY`, `AZURE_STORAGE_CONTAINER`. Frontend needs none.
 No `MONGODB_URI` → in-memory demo data (login `annotator@neoqcr.com` / `demo`).
 Fixed in code: port 4000, JWT 8h (random secret per start), SAS links 10 min, near expiry < 30% shelf life left.

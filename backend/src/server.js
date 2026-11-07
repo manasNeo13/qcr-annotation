@@ -1,5 +1,7 @@
 import cors from 'cors';
 import express from 'express';
+import fs from 'node:fs';
+import path from 'node:path';
 import { env } from './config/env.js';
 import { repo } from './repos/index.js';
 import authRouter from './routes/auth.js';
@@ -13,10 +15,25 @@ app.set('trust proxy', 1);
 app.use(cors()); // Bearer-token auth, no cookies → any origin OK
 app.use(express.json({ limit: '1mb' }));
 
-app.use('/api/health', healthRouter);
-app.use('/api/auth', authRouter);
-app.use('/api/documents', documentsRouter);
+// Everything lives under BASE_PATH (e.g. /qcr when hosted at neophyte.ril.com/qcr; '' = root).
+const base = express.Router();
+base.use('/api/health', healthRouter);
+base.use('/api/auth', authRouter);
+base.use('/api/documents', documentsRouter);
 
+// Single-image deploy: serve the built frontend (set STATIC_DIR, e.g. in Docker) with SPA fallback.
+if (process.env.STATIC_DIR && fs.existsSync(process.env.STATIC_DIR)) {
+  const dir = path.resolve(process.env.STATIC_DIR);
+  base.use('/assets', express.static(path.join(dir, 'assets'), { immutable: true, maxAge: '1y' }));
+  base.use(express.static(dir, { index: false }));
+  base.use((req, res, next) => {
+    if (req.method !== 'GET' || req.path.startsWith('/api/')) return next();
+    res.set('Cache-Control', 'no-cache').sendFile(path.join(dir, 'index.html'));
+  });
+  if (env.BASE_PATH) app.get('/', (req, res) => res.redirect(`${env.BASE_PATH}/`));
+}
+
+app.use(env.BASE_PATH || '/', base);
 
 app.use((req, res) => res.status(404).json({ message: 'Not found' }));
 // eslint-disable-next-line no-unused-vars
