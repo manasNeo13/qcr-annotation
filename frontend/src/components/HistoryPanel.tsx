@@ -116,7 +116,7 @@ export default function HistoryPanel({ doc }: { doc: DocumentItem }) {
       {doc.history.length > 0 && (
         <Box sx={{ mt: 2.5, p: 1.5, borderRadius: '8px', bgcolor: colors.surface2, border: `1px dashed ${colors.borderStrong}` }}>
           <Typography sx={{ fontSize: 12, fontWeight: 700, letterSpacing: '1.2px', textTransform: 'uppercase', color: colors.muted }}>
-            Original values (v1)
+            Original values
           </Typography>
           <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr 1fr', sm: 'repeat(4, 1fr)' }, gap: 1, mt: 0.5 }}>
             {FIELDS.map((f) => (

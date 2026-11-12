@@ -1,5 +1,6 @@
 import { BlobSASPermissions, generateBlobSASQueryParameters, StorageSharedKeyCredential } from '@azure/storage-blob';
 import { env } from '../config/env.js';
+import { safeDecode } from '../lib/safeDecode.js';
 
 const configured = Boolean(env.AZURE_STORAGE_ACCOUNT && env.AZURE_STORAGE_KEY);
 const cred = configured ? new StorageSharedKeyCredential(env.AZURE_STORAGE_ACCOUNT, env.AZURE_STORAGE_KEY) : null;
@@ -11,7 +12,7 @@ function resolve(ref) {
     const u = new URL(ref);
     if (u.host !== `${env.AZURE_STORAGE_ACCOUNT}.blob.core.windows.net`) return {}; // E2E/S3 etc. — not handled
     const [container, ...rest] = u.pathname.replace(/^\//, '').split('/');
-    return { container, blobName: decodeURIComponent(rest.join('/')) };
+    return { container, blobName: safeDecode(rest.join('/')) };
   }
   return { container: env.AZURE_STORAGE_CONTAINER, blobName: ref.replace(/^\//, '') };
 }

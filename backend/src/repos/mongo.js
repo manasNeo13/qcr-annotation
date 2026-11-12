@@ -9,11 +9,12 @@
 import dns from 'node:dns';
 import { MongoClient } from 'mongodb';
 import { env } from '../config/env.js';
-import { computeEditStats, editedPage } from '../lib/editStats.js';
+import { computeEditStats, diffFields, editedPage } from '../lib/editStats.js';
 import { HttpError } from '../lib/httpError.js';
 import { IST_OFFSET_MS, istWindow } from '../lib/istDay.js';
 import { NEAR_EXPIRY_PCT, startOfToday, toISODate } from '../lib/status.js';
 import { NONE_KEY } from '../lib/validation.js';
+import { safeDecode } from '../lib/safeDecode.js';
 
 const ORG_WIDE_ROLES = ['nhq', 'organization admin', 'admin', 'org admin'];
 const ACCESS_TTL_MS = 60_000;
@@ -96,11 +97,23 @@ const toDate = (x) => ({ $convert: { input: x, to: 'date', onError: null, onNull
 /** metadata docs → one row per env_id, with status. */
 const RAW_FIELDS = ['env_id', 'timestamp', 'img_url', 'mrp', 'mfg_date', 'expiry_date', 'batch_no', 'ean', 'edited_by', 'edited_at', 'annotation_version', 'annotation_history'];
 
+/** Editor name for edits made outside this dashboard (root ≠ predicted, no edited_by). */
+export const STORE_USER = 'Store User';
+
+/** Original OCR values. Docs without `predicted` → own root values (= unedited). */
+const predictedOf = {
+  $cond: [
+    { $eq: [{ $type: '$predicted' }, 'object'] },
+    '$predicted',
+    { mrp: '$mrp', mfg_date: '$mfg_date', expiry_date: '$expiry_date', batch_no: '$batch_no' },
+  ],
+};
+
 /** metadata docs → one row per env_id, with status. envIds = allowed set (filtered AFTER group — $in before group is ~15x slower on Cosmos). */
 function rowStages(envIds, { from, to } = {}) {
   const today = startOfToday();
   return [
-    { $project: Object.fromEntries(RAW_FIELDS.map((f) => [f, 1])) },
+    { $project: { ...Object.fromEntries(RAW_FIELDS.map((f) => [f, 1])), pred: predictedOf } },
     { $sort: { env_id: 1, timestamp: -1 } },
     {
       $group: {
@@ -116,6 +129,10 @@ function rowStages(envIds, { from, to } = {}) {
         exps: { $push: '$expiry_date' },
         batches: { $push: '$batch_no' },
         eans: { $push: '$ean' },
+        pMrps: { $push: '$pred.mrp' },
+        pMfgs: { $push: '$pred.mfg_date' },
+        pExps: { $push: '$pred.expiry_date' },
+        pBatches: { $push: '$pred.batch_no' },
       },
     },
     ...(envIds ? [{ $match: { _id: { $in: envIds } } }] : []),
@@ -129,6 +146,12 @@ function rowStages(envIds, { from, to } = {}) {
         exp: toDate(firstNonNull('$exps')),
         batch: firstNonNull('$batches'),
         ean: firstNonNull('$eans'),
+        pred: {
+          mrp: firstNonNull('$pMrps'),
+          mfg: toDate(firstNonNull('$pMfgs')),
+          exp: toDate(firstNonNull('$pExps')),
+          batch: firstNonNull('$pBatches'),
+        },
       },
     },
     {
@@ -185,30 +208,52 @@ async function filteredRows(f, user) {
 const emptyCounts = () => ({ all: 0, ok: 0, near_expiry: 0, expired: 0 });
 
 const iso = (d) => (d instanceof Date && !Number.isNaN(d.getTime()) ? d : null);
-const fileOf = (url) => (url ? decodeURIComponent(String(url).split('?')[0].split('/').pop() || '') : '');
+const fileOf = (url) => (url ? safeDecode(String(url).split('?')[0].split('/').pop() || '') : '');
+
+/** Raw row values { mrp, mfg, exp, batch } → DTO metadata. */
+const metaOf = (v = {}) => ({
+  mfgDate: iso(v.mfg) ? toISODate(v.mfg) : '',
+  expiryDate: iso(v.exp) ? toISODate(v.exp) : '',
+  batchNumber: v.batch != null ? String(v.batch) : '',
+  mrp: v.mrp != null && !Number.isNaN(Number(v.mrp)) ? Number(v.mrp) : null,
+});
+
+/**
+ * Outside edits (other apps write root fields, leave `predicted`, no edited_by/edited_at).
+ * First known state (history[0] or current) ≠ predicted → prepend predicted as v0,
+ * attribute that change to STORE_USER. Edits after a dashboard save stay undetectable.
+ */
+function withOutsideEdit(dto, r) {
+  if (!r.pred) return dto;
+  const predicted = metaOf(r.pred);
+  const h = dto.history;
+  const first = h[0]?.metadata ?? dto.metadata;
+  if (!diffFields(predicted, first).length) return dto;
+  const v0 = { version: 0, metadata: predicted, editedBy: 'system', editedAt: dto.createdAt };
+  if (h.length) {
+    const h0 = h[0].editedBy && h[0].editedBy !== 'system' ? h[0] : { ...h[0], editedBy: STORE_USER };
+    return { ...dto, history: [v0, h0, ...h.slice(1)] };
+  }
+  return { ...dto, history: [v0], updatedBy: dto.updatedBy ?? STORE_USER };
+}
 
 function toDto(r) {
   const ts = iso(r.ts)?.toISOString() ?? new Date(0).toISOString();
   const ean = r.ean != null ? String(r.ean) : '';
-  return {
+  return withOutsideEdit({
     id: r._id,
     productName: ean ? `EAN ${ean}` : 'No EAN',
     ean,
     fileName: fileOf(r.img),
     imageRef: r.img || '',
-    metadata: {
-      mfgDate: iso(r.mfg) ? toISODate(r.mfg) : '',
-      expiryDate: iso(r.exp) ? toISODate(r.exp) : '',
-      batchNumber: r.batch != null ? String(r.batch) : '',
-      mrp: r.mrp != null && !Number.isNaN(Number(r.mrp)) ? Number(r.mrp) : null,
-    },
+    metadata: metaOf(r),
     status: r.status,
     version: Number(r.version) || 1,
     createdAt: ts,
     updatedAt: iso(r.editedAt)?.toISOString() ?? ts,
     updatedBy: r.editedBy ?? undefined,
     history: Array.isArray(r.history) ? r.history : [],
-  };
+  }, r);
 }
 
 async function getRow(envId) {
@@ -216,16 +261,14 @@ async function getRow(envId) {
   return row ? toDto(row) : null;
 }
 
-/** Edited captures only (history non-empty) in scope + capture range + search → DTOs. */
+/** Edited captures only (dashboard history or outside edit) in scope + capture range + search → DTOs. */
 async function editedRows({ from, to, client, q }, user) {
   const envIds = await scopedEnvIds(user.id, { client });
   if (!envIds.length) return [];
   const rows = await col('metadata')
-    .aggregate([...rowStages(envIds, { from, to }), { $match: { 'history.0': { $exists: true } } }, ...searchStage(q)], {
-      allowDiskUse: true,
-    })
+    .aggregate([...rowStages(envIds, { from, to }), ...searchStage(q)], { allowDiskUse: true })
     .toArray();
-  return rows.map(toDto);
+  return rows.map(toDto).filter((d) => d.history.length);
 }
 
 // ── Repo ─────────────────────────────────────────────────────────────────
