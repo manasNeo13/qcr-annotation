@@ -16,6 +16,10 @@ export const FIELDS = [
   { key: 'expiry', get: (m) => day(m.expiryDate) },
 ];
 
+/** Editor name for edits made outside the dashboard (store app / SDK). */
+export const SDK_EDITOR = 'SDK';
+const sourceOf = (editor) => (editor === SDK_EDITOR ? 'sdk' : 'dashboard');
+
 const zero = () => ({ batch: 0, mrp: 0, mfd: 0, expiry: 0, any: 0 });
 
 /** Field keys that differ between two metadata snapshots. */
@@ -81,11 +85,13 @@ export function editedPage(docs, { changed, editor, status = 'all', page = 1, pa
 }
 
 /**
- * docs → { total, changed, byDay, annotators, rows? }.
+ * docs → { total, changed, bySource, byDay, annotators, rows? }.
+ * bySource.{dashboard,sdk}[field] = images where that source changed the field (any save; revert still counts).
  * annotators[].changed = images where THEY changed a field (a later revert still counts).
  */
 export function computeEditStats(docs, { detail = false } = {}) {
   const changed = zero();
+  const bySource = { dashboard: zero(), sdk: zero() };
   const days = new Map();
   const people = new Map();
   const rows = [];
@@ -109,6 +115,11 @@ export function computeEditStats(docs, { detail = false } = {}) {
       s.fields.forEach((f) => cur.fields.add(f));
       byEditor.set(s.editor, cur);
     }
+    const src = { dashboard: new Set(), sdk: new Set() };
+    for (const [name, v] of byEditor) v.fields.forEach((f) => src[sourceOf(name)].add(f));
+    add(bySource.dashboard, [...src.dashboard]);
+    add(bySource.sdk, [...src.sdk]);
+
     for (const [name, v] of byEditor) {
       const p = people.get(name) ?? { name, images: 0, saves: 0, changed: zero() };
       p.images++;
@@ -135,6 +146,7 @@ export function computeEditStats(docs, { detail = false } = {}) {
   return {
     total: docs.length,
     changed,
+    bySource,
     byDay: [...days.values()].sort((a, b) => a.date.localeCompare(b.date)),
     annotators: [...people.values()].sort((a, b) => b.images - a.images || a.name.localeCompare(b.name)),
     ...(detail ? { rows: rows.sort((a, b) => a.captureDay.localeCompare(b.captureDay) || a.id.localeCompare(b.id)) } : {}),

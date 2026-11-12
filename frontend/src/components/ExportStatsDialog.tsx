@@ -26,7 +26,7 @@ import { annotatorLines, type Cell, dayLines, detailLines, downloadCsv, summaryL
 type Report = 'summary' | 'days' | 'annotators' | 'detail';
 
 const REPORTS: { key: Report; label: string; hint: string }[] = [
-  { key: 'summary', label: 'Summary', hint: 'Total images and % changed per field' },
+  { key: 'summary', label: 'Summary', hint: 'Accuracy per field: overall, Dashboard, SDK' },
   { key: 'days', label: 'By capture day', hint: 'Same numbers, one row per day' },
   { key: 'annotators', label: 'By annotator', hint: 'Images handled and fields changed per person' },
   { key: 'detail', label: 'Image-level detail', hint: 'Every image: original vs final values' },

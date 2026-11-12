@@ -9,7 +9,7 @@
 import dns from 'node:dns';
 import { MongoClient } from 'mongodb';
 import { env } from '../config/env.js';
-import { computeEditStats, diffFields, editedPage } from '../lib/editStats.js';
+import { SDK_EDITOR, computeEditStats, diffFields, editedPage } from '../lib/editStats.js';
 import { HttpError } from '../lib/httpError.js';
 import { IST_OFFSET_MS, istWindow } from '../lib/istDay.js';
 import { NEAR_EXPIRY_PCT, startOfToday, toISODate } from '../lib/status.js';
@@ -98,7 +98,7 @@ const toDate = (x) => ({ $convert: { input: x, to: 'date', onError: null, onNull
 const RAW_FIELDS = ['env_id', 'timestamp', 'img_url', 'mrp', 'mfg_date', 'expiry_date', 'batch_no', 'ean', 'edited_by', 'edited_at', 'annotation_version', 'annotation_history'];
 
 /** Editor name for edits made outside this dashboard (root ≠ predicted, no edited_by). */
-export const STORE_USER = 'Store User';
+export const STORE_USER = SDK_EDITOR;
 
 /** Original OCR values. Docs without `predicted` → own root values (= unedited). */
 const predictedOf = {

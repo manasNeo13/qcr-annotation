@@ -160,9 +160,14 @@ export interface StatsRow {
   lastEditedAt: string | null;
 }
 
+export type EditSource = 'dashboard' | 'sdk';
+
 export interface EditStats {
   total: number;
+  /** Images where final ≠ OCR (any source). */
   changed: FieldCounts;
+  /** Images where that source changed the field (a later revert still counts). */
+  bySource: Record<EditSource, FieldCounts>;
   byDay: DayStats[];
   annotators: AnnotatorStats[];
   rows?: StatsRow[];

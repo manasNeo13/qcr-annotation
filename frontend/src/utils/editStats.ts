@@ -10,6 +10,7 @@ import type {
   EditField,
   EditInfo,
   EditKey,
+  EditSource,
   EditStats,
   FieldCounts,
   StatsRow,
@@ -29,6 +30,11 @@ const GET: Record<EditField, (m: Partial<DocMetadata>) => string | number | null
   mrp: (m) => money(m.mrp),
   mfd: (m) => day(m.mfgDate),
 };
+
+/** Editor name for edits made outside the dashboard (store app / SDK). Mirrors backend SDK_EDITOR. */
+export const SDK_EDITOR = 'SDK';
+const sourceOf = (editor: string): EditSource => (editor === SDK_EDITOR ? 'sdk' : 'dashboard');
+export const SOURCE_LABELS: Record<EditSource, string> = { dashboard: 'Dashboard', sdk: 'SDK' };
 
 const zero = (): FieldCounts => ({ batch: 0, mrp: 0, mfd: 0, expiry: 0, any: 0 });
 const diff = (a: Partial<DocMetadata> = {}, b: Partial<DocMetadata> = {}) =>
@@ -68,12 +74,15 @@ export const editLabel = (changed: EditKey, editor?: string) =>
 
 /** % with 2 decimals, '0.00%' when no images. */
 export const pct = (n: number, total: number) => `${total ? ((n / total) * 100).toFixed(2) : '0.00'}%`;
+/** Accuracy = share of images NOT edited. '—' when no images. */
+export const accuracy = (edited: number, total: number) => (total ? pct(total - edited, total) : '—');
 
 export function computeEditStats(
   docs: DocumentItem[],
   { detail = false, dayOf }: { detail?: boolean; dayOf: (iso: string) => string },
 ): EditStats {
   const changed = zero();
+  const bySource: Record<EditSource, FieldCounts> = { dashboard: zero(), sdk: zero() };
   const days = new Map<string, DayStats>();
   const people = new Map<string, AnnotatorStats>();
   const rows: StatsRow[] = [];
@@ -98,6 +107,10 @@ export function computeEditStats(
       diff(states[i], states[i + 1]).forEach((f) => cur.fields.add(f));
       byEditor.set(editor, cur);
     });
+    const src: Record<EditSource, Set<EditField>> = { dashboard: new Set(), sdk: new Set() };
+    for (const [name, v] of byEditor) v.fields.forEach((f) => src[sourceOf(name)].add(f));
+    add(bySource.dashboard, [...src.dashboard]);
+    add(bySource.sdk, [...src.sdk]);
     for (const [name, v] of byEditor) {
       const p = people.get(name) ?? { name, images: 0, saves: 0, changed: zero() };
       p.images++;
@@ -123,6 +136,7 @@ export function computeEditStats(
   return {
     total: docs.length,
     changed,
+    bySource,
     byDay: [...days.values()].sort((a, b) => a.date.localeCompare(b.date)),
     annotators: [...people.values()].sort((a, b) => b.images - a.images || a.name.localeCompare(b.name)),
     ...(detail ? { rows: rows.sort((a, b) => a.captureDay.localeCompare(b.captureDay) || a.id.localeCompare(b.id)) } : {}),
@@ -152,17 +166,30 @@ export function downloadCsv(name: string, csv: string) {
 const countCols = (c: FieldCounts, total: number) =>
   [...EDIT_FIELDS, 'any' as const].flatMap((k) => [c[k], pct(c[k], total)]);
 const countHead = [...EDIT_FIELDS.map((k) => FIELD_LABELS[k]), 'Any change'].flatMap((l) => [l, `${l} %`]);
+const accCols = (c: FieldCounts, total: number) =>
+  [...EDIT_FIELDS, 'any' as const].flatMap((k) => [c[k], accuracy(c[k], total)]);
+const accHead = [...EDIT_FIELDS.map((k) => FIELD_LABELS[k]), 'All fields'].flatMap((l) => [`${l} edited`, `${l} accuracy`]);
+
+const summaryRow = (s: EditStats, k: EditKey, label: string): Cell[] => [
+  label,
+  accuracy(s.changed[k], s.total),
+  s.changed[k],
+  accuracy(s.bySource.dashboard[k], s.total),
+  s.bySource.dashboard[k],
+  accuracy(s.bySource.sdk[k], s.total),
+  s.bySource.sdk[k],
+];
 
 export const summaryLines = (s: EditStats): Cell[][] => [
-  ['Field', 'Images changed', '% of images'],
-  ['Total images', s.total, ''],
-  ...EDIT_FIELDS.map((k) => [FIELD_LABELS[k], s.changed[k], pct(s.changed[k], s.total)]),
-  ['Any change', s.changed.any, pct(s.changed.any, s.total)],
+  ['Field', 'Overall accuracy', 'Images edited', 'Dashboard accuracy', 'Dashboard edits', 'SDK accuracy', 'SDK edits'],
+  ['Total images', s.total, '', '', '', '', ''],
+  ...EDIT_FIELDS.map((k) => summaryRow(s, k, FIELD_LABELS[k])),
+  summaryRow(s, 'any', 'All fields'),
 ];
 
 export const dayLines = (s: EditStats): Cell[][] => [
-  ['Capture day', 'Total images', ...countHead],
-  ...s.byDay.map((d) => [d.date, d.total, ...countCols(d.changed, d.total)]),
+  ['Capture day', 'Total images', ...accHead],
+  ...s.byDay.map((d) => [d.date, d.total, ...accCols(d.changed, d.total)]),
 ];
 
 export const annotatorLines = (list: AnnotatorStats[]): Cell[][] => [
