@@ -12,6 +12,7 @@ import { requireAuth } from '../middleware/auth.js';
 import { requirePerm } from '../middleware/permissions.js';
 import { VIEW_PERMISSIONS } from '../lib/permissions.js';
 import { repo } from '../repos/index.js';
+import { onNewCaptures } from '../services/live.js';
 import { signBlobUrl } from '../services/sas.js';
 
 const router = Router();
@@ -71,6 +72,7 @@ router.get('/groups/:by', requirePerm('view_annotation'), async (req, res) => {
  */
 const IDS_TTL_MS = 60_000;
 const idsCache = new Map(); // key → { at, ids: Promise<string[]> }
+onNewCaptures(() => idsCache.clear()); // new captures shift prev/next order
 async function orderedIdsFor(filter, user) {
   const key = `${user.id}|${JSON.stringify(filter)}`;
   const hit = idsCache.get(key);

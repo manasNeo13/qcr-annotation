@@ -41,6 +41,29 @@ export const memoryRepo = {
   },
   async close() {},
 
+  /** Live captures: demo data never grows → no events. */
+  live: {
+    async since() {
+      return [];
+    },
+    async byIds() {
+      return [];
+    },
+    async storesOf() {
+      return new Map();
+    },
+    async visibleTo(_user, events) {
+      return events;
+    },
+    onAnnounced() {},
+    async prints() {
+      return [];
+    },
+    async count() {
+      return docs.length;
+    },
+  },
+
   users: {
     async findForLogin(email) {
       const u = users.find((x) => x.email.toLowerCase() === email.toLowerCase());

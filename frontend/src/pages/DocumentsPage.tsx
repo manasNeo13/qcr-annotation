@@ -1,5 +1,5 @@
 import { useNavigate } from 'react-router-dom';
-import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Box, Paper } from '@mui/material';
 import { api } from '../api';
 import DocumentTable from '../components/DocumentTable';
@@ -7,6 +7,9 @@ import EmptyActions from '../components/EmptyActions';
 import ListToolbar from '../components/ListToolbar';
 import PageBreadcrumbs, { type Crumb } from '../components/PageBreadcrumbs';
 import { carryParams, useListState } from '../hooks/useListState';
+import { useLive, type LiveEvent } from '../live/LiveContext';
+import LivePill from '../live/LivePill';
+import { refreshLists } from '../live/refresh';
 
 /** Fixed page size. */
 const PAGE_SIZE = 15;
@@ -35,9 +38,20 @@ export default function DocumentsPage() {
 
   const crumbs: Crumb[] = [{ label: 'Filter Table' }];
 
+  // Live: new captures → reload current page by itself, new rows glow.
+  const qc = useQueryClient();
+  const live = useLive();
+  const onLiveRefresh = (events: LiveEvent[]) => {
+    refreshLists(qc);
+    live.flash(events.map((e) => e.env));
+  };
+
   return (
     <Box className="nq-fade-up">
-      <PageBreadcrumbs items={crumbs} />
+      <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 1 }}>
+        <PageBreadcrumbs items={crumbs} />
+        <LivePill view={filter} onRefresh={onLiveRefresh} />
+      </Box>
 
       <Paper sx={{ overflow: 'hidden' }}>
         <ListToolbar
@@ -58,6 +72,7 @@ export default function DocumentsPage() {
           onPage={(p) => update({ page: p })}
           onOpen={open}
           emptyActions={<EmptyActions state={state} />}
+          highlight={live.highlight}
         />
       </Paper>
     </Box>

@@ -7,7 +7,7 @@
  * Edits write to the NEWEST metadata doc of a capture; previous values pushed to annotation_history.
  */
 import dns from 'node:dns';
-import { MongoClient } from 'mongodb';
+import { MongoClient, ObjectId } from 'mongodb';
 import { env } from '../config/env.js';
 import { SDK_EDITOR, computeEditStats, diffFields, editedPage } from '../lib/editStats.js';
 import { HttpError } from '../lib/httpError.js';
@@ -72,7 +72,8 @@ async function scope(userId, fresh = false) {
   const rows = raw
     .filter((r) => r.env_id)
     .map((r) => ({ env: r.env_id, client: String(r.client_name ?? '').trim().toLowerCase() }));
-  const s = { at: Date.now(), rows, envIds: rows.map((r) => r.env) };
+  // storeKeys: "store:<id>" / "warehouse:<id>" → live capture events (services/live.js).
+  const s = { at: Date.now(), rows, envIds: rows.map((r) => r.env), storeKeys: new Set(stores.map((x) => `${x.kind}:${x.id}`)) };
   accessCache.set(userId, s);
   return s;
 }
@@ -275,6 +276,16 @@ async function editedRows({ from, to, client, q }, user) {
   return rows.map(toDto).filter((d) => d.history.length);
 }
 
+/** metadata doc → live event fields. */
+const liveDoc = (d) => ({
+  id: String(d._id),
+  env: d.env_id ?? null,
+  ts: (iso(d.timestamp) ?? (d._id instanceof ObjectId ? d._id.getTimestamp() : new Date())).toISOString(),
+  ean: d.ean != null ? String(d.ean) : '',
+  batch: d.batch_no != null ? String(d.batch_no) : '',
+  hasImage: !!d.img_url,
+});
+
 // ── Repo ─────────────────────────────────────────────────────────────────
 export const mongoRepo = {
   name: 'mongo',
@@ -290,6 +301,86 @@ export const mongoRepo = {
   },
   async close() {
     await client?.close();
+  },
+
+  /**
+   * Live captures (services/live.js). Reads metadata by _id only (default index) → cheap on any Mongo.
+   * ObjectId _id carries insert time → "everything inserted after T" = _id > ObjectId(T).
+   */
+  live: {
+    /** Recent metadata docs: _id inserted at/after `sinceMs` (overlap handled by caller). */
+    async since(sinceMs, limit = 1000) {
+      const docs = await col('metadata')
+        .find(
+          { _id: { $gte: ObjectId.createFromTime(Math.floor(sinceMs / 1000)) } },
+          { projection: { env_id: 1, timestamp: 1, img_url: 1, ean: 1, batch_no: 1 } },
+        )
+        .sort({ _id: 1 })
+        .limit(limit)
+        .toArray();
+      return docs.filter((d) => d._id instanceof ObjectId).map(liveDoc);
+    },
+
+    /** Re-check docs that had no image / no environment yet. */
+    async byIds(ids) {
+      if (!ids.length) return [];
+      const docs = await col('metadata')
+        .find({ _id: { $in: ids.map((i) => new ObjectId(i)) } }, { projection: { env_id: 1, timestamp: 1, img_url: 1, ean: 1, batch_no: 1 } })
+        .toArray();
+      return docs.map(liveDoc);
+    },
+
+    /** env_id → store keys ("store:X" / "warehouse:Y"). Missing env = not in map. */
+    async storesOf(envIds) {
+      const map = new Map();
+      if (!envIds.length) return map;
+      const rows = await col('environment')
+        .find({ env_id: { $in: envIds } }, { projection: { _id: 0, env_id: 1, store_id: 1, warehouse_id: 1 } })
+        .toArray();
+      for (const r of rows) {
+        const keys = [];
+        if (r.store_id != null && r.store_id !== '') keys.push(`store:${r.store_id}`);
+        if (r.warehouse_id != null && r.warehouse_id !== '') keys.push(`warehouse:${r.warehouse_id}`);
+        map.set(r.env_id, keys);
+      }
+      return map;
+    },
+
+    /**
+     * Value fingerprints of metadata docs inserted since `sinceMs`, newest first (by _id → default index).
+     * Compared tick to tick → edits by any app (SDK, main app, this dashboard) and deletions.
+     */
+    async prints(sinceMs, limit) {
+      const docs = await col('metadata')
+        .find(
+          { _id: { $gte: ObjectId.createFromTime(Math.floor(sinceMs / 1000)) } },
+          { projection: { env_id: 1, mrp: 1, mfg_date: 1, expiry_date: 1, batch_no: 1, ean: 1, annotation_version: 1, img_url: 1 } },
+        )
+        .sort({ _id: -1 })
+        .limit(limit)
+        .toArray();
+      return docs.map((d) => ({
+        id: String(d._id),
+        env: d.env_id ?? null,
+        hash: JSON.stringify([d.mrp, d.mfg_date, d.expiry_date, d.batch_no, d.ean, d.annotation_version, d.img_url]),
+      }));
+    },
+
+    /** Total metadata docs (collection metadata, no scan) — a drop means captures were deleted. */
+    async count() {
+      return col('metadata').estimatedDocumentCount();
+    },
+
+    /** New captures announced → store scope caches (env id lists) are stale; lists must include the new ids. */
+    onAnnounced() {
+      clearAccessCache();
+    },
+
+    /** Events this user may see (same store scope as lists). Throws 401 if account inactive. */
+    async visibleTo(user, events) {
+      const { storeKeys } = await scope(user.id);
+      return events.filter((e) => e.stores.some((k) => storeKeys.has(k)));
+    },
   },
 
   users: {

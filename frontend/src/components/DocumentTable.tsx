@@ -41,6 +41,8 @@ interface Props {
   showEdits?: boolean;
   /** Don't jump to page top on page change (caller scrolls itself). */
   keepScroll?: boolean;
+  /** Capture ids to glow briefly (live: just refreshed). */
+  highlight?: Set<string>;
 }
 
 const SHOW: Record<EditField, (m: DocMetadata) => string> = {
@@ -81,6 +83,7 @@ export default function DocumentTable({
   emptyActions,
   showEdits,
   keepScroll,
+  highlight,
 }: Props) {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
@@ -126,6 +129,7 @@ export default function DocumentTable({
               <Box
                 component="li"
                 key={doc?.id ?? i}
+                className={doc && highlight?.has(doc.id) ? 'nq-new-row' : undefined}
                 role={doc ? 'button' : undefined}
                 tabIndex={doc ? 0 : -1}
                 onClick={doc ? () => onOpen(doc.id) : undefined}
@@ -227,6 +231,7 @@ export default function DocumentTable({
                 : items.map((doc) => (
                     <TableRow
                       key={doc.id}
+                      className={highlight?.has(doc.id) ? 'nq-new-row' : undefined}
                       hover
                       tabIndex={0}
                       role="link"

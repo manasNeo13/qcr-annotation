@@ -9,6 +9,8 @@ import { repo } from './repos/index.js';
 import authRouter from './routes/auth.js';
 import documentsRouter from './routes/documents.js';
 import healthRouter from './routes/health.js';
+import liveRouter from './routes/live.js';
+import { closeAll as closeLive } from './services/live.js';
 import { sasConfigured } from './services/sas.js';
 
 const app = express();
@@ -23,6 +25,7 @@ base.use('/api/health', healthRouter);
 base.use('/api/auth', authRouter);
 base.use('/api/documents', documentsRouter);
 base.use('/api/admin', adminRouter);
+base.use('/api/live', liveRouter);
 
 // Single-image deploy: serve the built frontend (set STATIC_DIR, e.g. in Docker) with SPA fallback.
 if (process.env.STATIC_DIR && fs.existsSync(process.env.STATIC_DIR)) {
@@ -56,6 +59,7 @@ const server = app.listen(env.PORT, '0.0.0.0', () => console.log(`API listening 
 
 const shutdown = async (sig) => {
   console.log(`${sig} — shutting down`);
+  closeLive();
   server.close();
   await repo.close();
   process.exit(0);

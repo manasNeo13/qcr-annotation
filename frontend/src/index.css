@@ -23,6 +23,15 @@ input[type='number'] { -moz-appearance: textfield; }
 @keyframes nqFadeUp { from { opacity: 0; transform: translateY(16px); } to { opacity: 1; transform: none; } }
 .nq-fade-up { animation: nqFadeUp .5s cubic-bezier(0.22, 0.68, 0, 1.2) both; }
 
+/* Live captures: pulsing dot, pill pop-in, new-row glow (6s) */
+@keyframes nqPulse { 0% { box-shadow: 0 0 0 0 currentColor; } 70% { box-shadow: 0 0 0 6px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+.nq-live-dot { animation: nqPulse 2s ease-out infinite; }
+@keyframes nqPillIn { from { opacity: 0; transform: scale(.9); } to { opacity: 1; transform: none; } }
+.nq-pill-in { animation: nqPillIn .25s ease-out both; }
+@keyframes nqNewRow { 0%, 40% { background-color: #d1fae5; } 100% { background-color: transparent; } }
+.nq-new-row, .nq-new-row > td { animation: nqNewRow 6s ease-out both; }
+@media (prefers-reduced-motion: reduce) { .nq-live-dot, .nq-pill-in { animation: none; } .nq-new-row, .nq-new-row > td { animation-duration: .01s; } }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: .01ms !important;

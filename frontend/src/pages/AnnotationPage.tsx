@@ -1,5 +1,5 @@
 import { useNavigate, useParams } from 'react-router-dom';
-import { keepPreviousData, useQuery } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Box, Paper } from '@mui/material';
 import { api } from '../api';
 import DocumentTable from '../components/DocumentTable';
@@ -9,6 +9,10 @@ import ListToolbar from '../components/ListToolbar';
 import PageBreadcrumbs, { type Crumb } from '../components/PageBreadcrumbs';
 import { carryParams, useListState } from '../hooks/useListState';
 import { annotationPath, batchLabel, eanLabel } from '../utils/annotation';
+import { useLive, type LiveEvent } from '../live/LiveContext';
+import LivePill from '../live/LivePill';
+import { refreshLists } from '../live/refresh';
+import { NONE_KEY } from '../types';
 
 const PAGE_SIZE = 15;
 
@@ -58,9 +62,22 @@ function AnnotationLevel({ ean, batch }: { ean?: string; batch?: string }) {
   };
 
   const counts = level === 'docs' ? docs.data?.counts : groups.data?.counts;
+
+  // Live: new captures → reload current page by itself. Glow new captures (docs) or their EAN/batch groups.
+  const qc = useQueryClient();
+  const live = useLive();
+  const onLiveRefresh = (events: LiveEvent[]) => {
+    refreshLists(qc);
+    live.flash(
+      events.map((e) => (level === 'docs' ? e.env : (level === 'ean' ? e.ean : e.batch) || NONE_KEY)),
+    );
+  };
   return (
     <Box className="nq-fade-up">
-      <PageBreadcrumbs items={crumbs} />
+      <Box sx={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 1 }}>
+        <PageBreadcrumbs items={crumbs} />
+        <LivePill view={{ ...filter, ean, batch }} onRefresh={onLiveRefresh} />
+      </Box>
 
       <Paper sx={{ overflow: 'hidden' }}>
         <ListToolbar
@@ -83,6 +100,7 @@ function AnnotationLevel({ ean, batch }: { ean?: string; batch?: string }) {
             onPage={(p) => update({ page: p })}
             onOpen={openDoc}
             emptyActions={<EmptyActions state={state} />}
+            highlight={live.highlight}
           />
         ) : (
           <GroupTable
@@ -99,6 +117,7 @@ function AnnotationLevel({ ean, batch }: { ean?: string; batch?: string }) {
             onOpen={(key) => navigate(level === 'ean' ? annotationPath(key, undefined, down) : annotationPath(ean, key, down))}
             label={level === 'ean' ? eanLabel : batchLabel}
             emptyActions={<EmptyActions state={state} />}
+            highlight={live.highlight}
           />
         )}
       </Paper>

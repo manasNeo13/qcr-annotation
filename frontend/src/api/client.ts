@@ -29,7 +29,7 @@ export class ApiError extends Error {
   }
 }
 
-function getToken(): string | null {
+export function getToken(): string | null {
   try {
     const raw = authStore.get();
     return raw ? (JSON.parse(raw).token as string) : null;

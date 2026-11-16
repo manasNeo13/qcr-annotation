@@ -38,6 +38,8 @@ interface Props {
   onOpen: (key: string) => void;
   label: (key: string) => string;
   emptyActions?: ReactNode;
+  /** Group keys to glow briefly (live: just refreshed). */
+  highlight?: Set<string>;
 }
 
 const STATUSES: DocStatus[] = ['ok', 'near_expiry', 'expired'];
@@ -90,6 +92,7 @@ export default function GroupTable({
   onOpen,
   label,
   emptyActions,
+  highlight,
 }: Props) {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
@@ -142,6 +145,7 @@ export default function GroupTable({
               <Box
                 component="li"
                 key={g?.key ?? i}
+                className={g && highlight?.has(g.key) ? 'nq-new-row' : undefined}
                 role={g ? 'button' : undefined}
                 tabIndex={g ? 0 : -1}
                 onClick={g ? () => onOpen(g.key) : undefined}
@@ -207,6 +211,7 @@ export default function GroupTable({
                 : items.map((g) => (
                     <TableRow
                       key={g.key}
+                      className={highlight?.has(g.key) ? 'nq-new-row' : undefined}
                       hover
                       tabIndex={0}
                       role="link"

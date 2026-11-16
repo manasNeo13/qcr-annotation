@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from 'react-router-dom';
 import ProtectedRoute from './auth/ProtectedRoute';
 import RequirePerm from './auth/RequirePerm';
 import AppLayout from './components/AppLayout';
+import { LiveProvider } from './live/LiveContext';
 import DocumentDetailPage from './pages/DocumentDetailPage';
 import AnnotationPage from './pages/AnnotationPage';
 import DocumentsPage from './pages/DocumentsPage';
@@ -14,7 +15,7 @@ export default function App() {
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route element={<ProtectedRoute />}>
-        <Route element={<AppLayout />}>
+        <Route element={<LiveProvider><AppLayout /></LiveProvider>}>
           <Route path="/documents" element={<RequirePerm perms={['view_documents']}><DocumentsPage /></RequirePerm>} />
           {/* Detail opens from Filter Table, Annotation or Edit Stats. */}
           <Route

@@ -1,14 +1,31 @@
-import { useCallback, useEffect, useState } from 'react';
-import { Link as RouterLink, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Link as RouterLink, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
-import { Alert, Box, Button, CircularProgress, IconButton, Paper, Skeleton, Tooltip, Typography } from '@mui/material';
+import {
+  Alert,
+  Box,
+  Button,
+  CircularProgress,
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  IconButton,
+  Paper,
+  Skeleton,
+  Tooltip,
+  Typography,
+} from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
 import EditIcon from '@mui/icons-material/EditOutlined';
 import CheckIcon from '@mui/icons-material/Check';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
+import ArrowForwardIcon from '@mui/icons-material/ArrowForward';
+import KeyboardIcon from '@mui/icons-material/KeyboardOutlined';
 import { api } from '../api';
+import { ApiError } from '../api/client';
+import { useLive } from '../live/LiveContext';
 import { useAuth } from '../auth/AuthContext';
 import { useAccess } from '../auth/useAccess';
 import HistoryPanel from '../components/HistoryPanel';
@@ -24,6 +41,57 @@ import { NEAR_EXPIRY_PCT } from '../utils/status';
 import { colors } from '../theme';
 
 const FORM_ID = 'metadata-form';
+const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform);
+const MOD = isMac ? '⌘' : 'Ctrl';
+
+const SHORTCUTS: [string, string][] = [
+  ['← / →', 'Previous / next capture'],
+  ['E', 'Edit'],
+  [`${MOD} + S`, 'Submit'],
+  [`${MOD} + Enter`, 'Submit & next (next capture opens in edit mode)'],
+  ['Esc', 'Cancel edit · back to list'],
+  ['?', 'Show shortcuts'],
+];
+
+/** Same values/version/history → nothing new to show. */
+const sameDoc = (a: DocumentItem, b: DocumentItem) =>
+  JSON.stringify([a.metadata, a.version, a.history.length]) === JSON.stringify([b.metadata, b.version, b.history.length]);
+
+function ShortcutsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
+      <DialogTitle sx={{ fontWeight: 700 }}>Keyboard shortcuts</DialogTitle>
+      <DialogContent>
+        <Box component="dl" sx={{ display: 'grid', gridTemplateColumns: 'auto 1fr', rowGap: 1.25, columnGap: 2, m: 0 }}>
+          {SHORTCUTS.map(([k, label]) => (
+            <Box key={k} sx={{ display: 'contents' }}>
+              <Box component="dt" sx={{ m: 0 }}>
+                <Box
+                  component="kbd"
+                  sx={{
+                    fontFamily: 'ui-monospace, monospace',
+                    fontSize: 12,
+                    px: 0.75,
+                    py: 0.25,
+                    borderRadius: '6px',
+                    border: `1px solid ${colors.borderStrong}`,
+                    bgcolor: colors.surface2,
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {k}
+                </Box>
+              </Box>
+              <Box component="dd" sx={{ m: 0, fontSize: 14, color: colors.textPrimary }}>
+                {label}
+              </Box>
+            </Box>
+          ))}
+        </Box>
+      </DialogContent>
+    </Dialog>
+  );
+}
 
 function Field({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
@@ -60,6 +128,7 @@ export default function DocumentDetailPage() {
 
 function DocumentDetail({ id }: { id: string }) {
   const navigate = useNavigate();
+  const location = useLocation();
   const [params] = useSearchParams();
   // Came from Annotation drill-down → ean + batch in URL; prev/next stays inside that batch.
   const ean = params.get('ean') ?? undefined;
@@ -97,7 +166,11 @@ function DocumentDetail({ id }: { id: string }) {
   const { user } = useAuth();
   const { can } = useAccess();
   const canEdit = can('edit_capture');
-  const [editing, setEditing] = useState(false);
+  // "Submit & next" opens the next capture already in edit mode.
+  const [editing, setEditing] = useState(() => !!(location.state as { edit?: boolean } | null)?.edit);
+  const [help, setHelp] = useState(false);
+  const afterSave = useRef<'next' | null>(null);
+  const [remote, setRemote] = useState<null | { kind: 'changed'; fresh: DocumentItem } | { kind: 'deleted' }>(null);
   const [dirty, setDirty] = useState(false);
   const onDirtyChange = useCallback((d: boolean) => setDirty(d), []);
 
@@ -121,9 +194,16 @@ function DocumentDetail({ id }: { id: string }) {
       qc.invalidateQueries({ queryKey: ['edit-stats'] });
       setEditing(false);
       setDirty(false);
+      setRemote(null);
       toast.success('Metadata updated');
+      const next = navRef.current?.nextId;
+      if (afterSave.current === 'next' && next) openCapture(next, true);
+      afterSave.current = null;
     },
-    onError: (e: Error) => toast.error(e.message || 'Update failed'),
+    onError: (e: Error) => {
+      afterSave.current = null;
+      toast.error(e.message || 'Update failed');
+    },
   });
 
   // No placeholder: previous capture's prev/next must never drive this one (caused skips 2 → 4).
@@ -143,37 +223,117 @@ function DocumentDetail({ id }: { id: string }) {
     }
   }, [nav?.nextId, nav?.prevId, filterKey, qc]);
 
+  const navRef = useRef(nav);
+  useEffect(() => {
+    navRef.current = nav;
+  }, [nav]);
+
+  /** Open another capture of this list (edit = straight into edit mode). */
+  const openCapture = useCallback(
+    (target: string, edit = false) =>
+      navigate(`/documents/${encodeURIComponent(target)}${listSearch ? `?${listSearch}` : ''}`, edit ? { state: { edit: true } } : undefined),
+    [navigate, listSearch],
+  );
+
   const go = useCallback(
     (target: string | null | undefined) => {
       if (!target) return;
       if (editing && dirty && !window.confirm('Discard unsaved changes?')) return;
-      navigate(`/documents/${encodeURIComponent(target)}${listSearch ? `?${listSearch}` : ''}`);
+      openCapture(target);
     },
-    [editing, dirty, navigate, listSearch],
+    [editing, dirty, openCapture],
   );
 
-  // ← / → keys step through captures (not while typing).
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (editing || e.altKey || e.ctrlKey || e.metaKey) return;
-      const t = e.target as HTMLElement;
-      if (t.closest('input, textarea, select, [contenteditable=true], [role=dialog]')) return;
-      if (e.key === 'ArrowLeft') go(nav?.prevId);
-      if (e.key === 'ArrowRight') go(nav?.nextId);
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [editing, go, nav?.prevId, nav?.nextId]);
+  /** Submit form; next = then open next capture in edit mode. Nothing changed + next → just move on. */
+  const submit = useCallback(
+    (next: boolean) => {
+      if (mutation.isPending || remote?.kind === 'deleted') return;
+      if (!dirty) {
+        if (next && nav?.nextId) openCapture(nav.nextId, true);
+        return;
+      }
+      afterSave.current = next ? 'next' : null;
+      (document.getElementById(FORM_ID) as HTMLFormElement | null)?.requestSubmit();
+    },
+    [dirty, mutation.isPending, remote?.kind, nav?.nextId, openCapture],
+  );
 
-  const back = () => {
+  const back = useCallback(() => {
     if (editing && dirty && !window.confirm('Discard unsaved changes?')) return;
     navigate(backTo);
-  };
+  }, [editing, dirty, navigate, backTo]);
 
-  const cancel = () => {
+  const cancel = useCallback(() => {
     if (dirty && !window.confirm('Discard unsaved changes?')) return;
     setEditing(false);
     setDirty(false);
+  }, [dirty]);
+
+  // Keyboard (see SHORTCUTS). Ctrl/⌘ combos + Esc also work inside inputs; plain keys don't (typing).
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement;
+      if (t.closest('[role=dialog]')) return;
+      const mod = e.ctrlKey || e.metaKey;
+      if (editing) {
+        if (mod && e.key.toLowerCase() === 's') {
+          e.preventDefault();
+          submit(false);
+        } else if (mod && e.key === 'Enter') {
+          e.preventDefault();
+          submit(true);
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          cancel();
+        }
+        return;
+      }
+      if (e.altKey || mod) return;
+      if (t.closest('input, textarea, select, [contenteditable=true]')) return;
+      if (e.key === 'ArrowLeft') go(nav?.prevId);
+      else if (e.key === 'ArrowRight') go(nav?.nextId);
+      else if (e.key.toLowerCase() === 'e' && canEdit && doc && remote?.kind !== 'deleted') setEditing(true);
+      else if (e.key === 'Escape') back();
+      else if (e.key === '?') setHelp(true);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [editing, go, nav?.prevId, nav?.nextId, submit, cancel, back, canEdit, doc, remote?.kind]);
+
+  // Live: this capture edited/deleted elsewhere (SDK, main app, another user).
+  const { subscribe } = useLive();
+  const liveRef = useRef({ doc, editing, dirty, pending: mutation.isPending });
+  useEffect(() => {
+    liveRef.current = { doc, editing, dirty, pending: mutation.isPending };
+  }, [doc, editing, dirty, mutation.isPending]);
+  useEffect(
+    () =>
+      subscribe(async (s) => {
+        if (s.kind !== 'changed' && !s.envs.includes(id)) return;
+        try {
+          const fresh = await api.getDocument(id);
+          const cur = liveRef.current;
+          if (!cur.doc || cur.pending || sameDoc(fresh, cur.doc)) return;
+          if (cur.editing && cur.dirty) {
+            setRemote({ kind: 'changed', fresh }); // don't wipe unsaved edits — ask
+          } else {
+            qc.setQueryData(['document', id], fresh);
+            toast('This capture was just updated elsewhere', { icon: '🔄' });
+          }
+        } catch (e) {
+          if (e instanceof ApiError && e.status === 404) {
+            setRemote({ kind: 'deleted' });
+            setEditing(false);
+          }
+        }
+      }),
+    [subscribe, id, qc],
+  );
+  const loadLatest = () => {
+    if (remote?.kind !== 'changed') return;
+    qc.setQueryData(['document', id], remote.fresh);
+    setDirty(false);
+    setRemote(null);
   };
 
   if (isError) {
@@ -199,6 +359,39 @@ function DocumentDetail({ id }: { id: string }) {
   return (
     <Box className="nq-fade-up">
       <PageBreadcrumbs items={crumbs} />
+      <ShortcutsDialog open={help} onClose={() => setHelp(false)} />
+      {remote?.kind === 'changed' && (
+        <Alert
+          severity="warning"
+          sx={{ mb: 2 }}
+          action={
+            <Box sx={{ display: 'flex', gap: 0.5 }}>
+              <Button color="inherit" size="small" onClick={loadLatest}>
+                Load latest
+              </Button>
+              <Button color="inherit" size="small" onClick={() => setRemote(null)}>
+                Keep mine
+              </Button>
+            </Box>
+          }
+        >
+          This capture was changed elsewhere while you were editing. Load the latest values (your edits are discarded) or keep
+          editing.
+        </Alert>
+      )}
+      {remote?.kind === 'deleted' && (
+        <Alert
+          severity="error"
+          sx={{ mb: 2 }}
+          action={
+            <Button color="inherit" size="small" onClick={() => navigate(backTo)}>
+              Back to list
+            </Button>
+          }
+        >
+          This capture was deleted. It can't be edited any more.
+        </Alert>
+      )}
       {/* Header */}
       <Box
         sx={{
@@ -265,6 +458,15 @@ function DocumentDetail({ id }: { id: string }) {
             justifyContent: { xs: 'space-between', sm: 'flex-end' },
           }}
         >
+          <Tooltip title="Keyboard shortcuts (?)">
+            <IconButton
+              onClick={() => setHelp(true)}
+              aria-label="Keyboard shortcuts"
+              sx={{ display: { xs: 'none', md: 'inline-flex' }, bgcolor: '#fff', border: `1px solid ${colors.border}` }}
+            >
+              <KeyboardIcon fontSize="small" />
+            </IconButton>
+          </Tooltip>
           <Box
             role="navigation"
             aria-label="Capture navigation"
@@ -321,25 +523,50 @@ function DocumentDetail({ id }: { id: string }) {
                 <Button variant="outlined" color="secondary" onClick={cancel} disabled={mutation.isPending}>
                   Cancel
                 </Button>
-                <Button
-                  type="submit"
-                  form={FORM_ID}
-                  variant="contained"
-                  disabled={mutation.isPending || !dirty}
-                  startIcon={mutation.isPending ? <CircularProgress size={16} color="inherit" /> : <CheckIcon />}
-                  sx={{
-                    '& .MuiButton-startIcon': {
-                      display: { xs: 'none', sm: 'inherit' },
-                    },
-                  }}
-                >
-                  Submit
-                </Button>
+                <Tooltip title={`Submit (${MOD}+S)`}>
+                  <span>
+                    <Button
+                      variant={nav?.nextId ? 'outlined' : 'contained'}
+                      onClick={() => submit(false)}
+                      disabled={mutation.isPending || !dirty || remote?.kind === 'deleted'}
+                      startIcon={mutation.isPending && !afterSave.current ? <CircularProgress size={16} color="inherit" /> : <CheckIcon />}
+                      sx={{ '& .MuiButton-startIcon': { display: { xs: 'none', sm: 'inherit' } } }}
+                    >
+                      Submit
+                    </Button>
+                  </span>
+                </Tooltip>
+                {nav?.nextId && (
+                  <Tooltip title={dirty ? `Submit, then open next capture (${MOD}+Enter)` : `No changes — open next capture (${MOD}+Enter)`}>
+                    <span>
+                      <Button
+                        variant="contained"
+                        onClick={() => submit(true)}
+                        disabled={mutation.isPending || remote?.kind === 'deleted'}
+                        endIcon={
+                          mutation.isPending && afterSave.current ? <CircularProgress size={16} color="inherit" /> : <ArrowForwardIcon />
+                        }
+                        sx={{ whiteSpace: 'nowrap' }}
+                      >
+                        {dirty ? 'Submit & next' : 'Next'}
+                      </Button>
+                    </span>
+                  </Tooltip>
+                )}
               </>
             ) : canEdit ? (
-              <Button variant="contained" startIcon={<EditIcon />} onClick={() => setEditing(true)} disabled={!doc}>
-                Edit
-              </Button>
+              <Tooltip title="Edit (E)">
+                <span>
+                  <Button
+                    variant="contained"
+                    startIcon={<EditIcon />}
+                    onClick={() => setEditing(true)}
+                    disabled={!doc || remote?.kind === 'deleted'}
+                  >
+                    Edit
+                  </Button>
+                </span>
+              </Tooltip>
             ) : null}
           </Box>
         </Box>
@@ -416,6 +643,7 @@ function DocumentDetail({ id }: { id: string }) {
             ) : editing ? (
               <>
                 <MetadataForm
+                  key={`${doc.version}|${JSON.stringify(doc.metadata)}`}
                   formId={FORM_ID}
                   initial={doc.metadata}
                   disabled={mutation.isPending}
