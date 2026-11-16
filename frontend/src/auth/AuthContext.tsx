@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { api } from '../api';
-import { AUTH_STORAGE_KEY, UNAUTHORIZED_EVENT } from '../api/client';
+import { UNAUTHORIZED_EVENT, authStore } from '../api/client';
 import type { User } from '../types';
 
 interface AuthState {
@@ -18,7 +18,7 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 
 function readStored(): AuthState {
   try {
-    const raw = localStorage.getItem(AUTH_STORAGE_KEY);
+    const raw = authStore.get();
     if (raw) return JSON.parse(raw);
   } catch {
     /* ignore */
@@ -30,14 +30,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<AuthState>(readStored);
 
   const logout = useCallback(() => {
-    localStorage.removeItem(AUTH_STORAGE_KEY);
+    authStore.clear();
     setState({ user: null, token: null });
   }, []);
 
   const login = useCallback(async (email: string, password: string) => {
     const { token, user } = await api.login(email, password);
     const next = { token, user };
-    localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify(next));
+    authStore.set(JSON.stringify(next));
     setState(next);
   }, []);
 

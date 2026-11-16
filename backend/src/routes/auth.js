@@ -3,6 +3,7 @@ import { HttpError } from '../lib/httpError.js';
 import { verifyPassword } from '../lib/password.js';
 import { loginSchema, parse } from '../lib/validation.js';
 import { requireAuth, signToken } from '../middleware/auth.js';
+import { accessOf } from '../middleware/permissions.js';
 import { repo } from '../repos/index.js';
 
 const router = Router();
@@ -19,6 +20,7 @@ router.post('/login', async (req, res) => {
   res.json({ token: signToken({ ...publicUser, role: user.role }), user: publicUser });
 });
 
-router.get('/me', requireAuth, (req, res) => res.json(req.user));
+/** Current user + role + permissions (fresh from DB → role edits apply without re-login). */
+router.get('/me', requireAuth, async (req, res) => res.json({ ...req.user, ...(await accessOf(req.user)) }));
 
 export default router;

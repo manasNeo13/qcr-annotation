@@ -16,6 +16,7 @@
  *   List filter also takes client, ean, batch.
  */
 import type {
+  Me,
   DayCounts,
   DayScope,
   DocMetadata,
@@ -48,6 +49,9 @@ const pagedQs = ({ page, pageSize, ...filter }: ListParams) => {
 };
 
 const real = {
+  /** Current user + role + permissions. */
+  getMe: () => request<Me>('/auth/me'),
+
   login: (email: string, password: string) =>
     request<LoginResponse>('/auth/login', {
       method: 'POST',

@@ -1,4 +1,6 @@
 import cors from 'cors';
+import { RENEW_HEADER } from './middleware/auth.js';
+import adminRouter from './routes/admin.js';
 import express from 'express';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -12,7 +14,7 @@ import { sasConfigured } from './services/sas.js';
 const app = express();
 app.disable('x-powered-by');
 app.set('trust proxy', 1);
-app.use(cors()); // Bearer-token auth, no cookies → any origin OK
+app.use(cors({ exposedHeaders: [RENEW_HEADER] })); // Bearer-token auth, no cookies → any origin OK
 app.use(express.json({ limit: '1mb' }));
 
 // Everything lives under BASE_PATH (e.g. /qcr when hosted at neophyte.ril.com/qcr; '' = root).
@@ -20,6 +22,7 @@ const base = express.Router();
 base.use('/api/health', healthRouter);
 base.use('/api/auth', authRouter);
 base.use('/api/documents', documentsRouter);
+base.use('/api/admin', adminRouter);
 
 // Single-image deploy: serve the built frontend (set STATIC_DIR, e.g. in Docker) with SPA fallback.
 if (process.env.STATIC_DIR && fs.existsSync(process.env.STATIC_DIR)) {

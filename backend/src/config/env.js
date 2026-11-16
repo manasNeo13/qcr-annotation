@@ -20,9 +20,17 @@ export const env = {
   BASE_PATH: normalizeBasePath(process.env.BASE_PATH),
   DATA_SOURCE: MONGODB_URI ? 'mongo' : 'memory',
   MONGODB_URI, // DB name taken from the URI path (e.g. /neo-icr)
-  // Random per start → users sign in again after a restart. Optional JWT_SECRET env keeps sessions across restarts.
-  JWT_SECRET: process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex'),
+  // Stable across restarts/redeploys: derived from MONGODB_URI (no extra secret in prod .env).
+  // Anyone with the URI could forge tokens — they already have full DB access. JWT_SECRET env overrides.
+  // No URI (memory demo) → random per start.
+  JWT_SECRET:
+    process.env.JWT_SECRET ||
+    (MONGODB_URI
+      ? crypto.createHash('sha256').update(`qcr-annotation:jwt:${MONGODB_URI}`).digest('hex')
+      : crypto.randomBytes(32).toString('hex')),
+  // Idle timeout: token lives 8h, renewed on activity (see middleware/auth.js) → only 8h of no API calls logs out.
   JWT_EXPIRES_IN: '8h',
+  JWT_RENEW_AFTER_S: 5 * 60, // re-issue at most every 5 min
   AZURE_STORAGE_ACCOUNT: process.env.AZURE_STORAGE_ACCOUNT || '',
   AZURE_STORAGE_KEY: process.env.AZURE_STORAGE_KEY || '',
   AZURE_STORAGE_CONTAINER: process.env.AZURE_STORAGE_CONTAINER || '',

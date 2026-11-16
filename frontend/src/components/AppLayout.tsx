@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import { Link as RouterLink, Outlet, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import {
@@ -18,27 +18,34 @@ import LogoutIcon from '@mui/icons-material/LogoutOutlined';
 import ListIcon from '@mui/icons-material/TableRowsOutlined';
 import LayersIcon from '@mui/icons-material/LayersOutlined';
 import StatsIcon from '@mui/icons-material/InsertChartOutlined';
+import UsersIcon from '@mui/icons-material/ManageAccountsOutlined';
 import { useAuth } from '../auth/AuthContext';
+import { useAccess } from '../auth/useAccess';
+import type { Permission } from '../utils/permissions';
 import { brandGrad, colors } from '../theme';
 
-const NAV = [
-  { key: 'documents', label: 'Filter Table', to: '/documents', icon: <ListIcon fontSize="small" /> },
-  { key: 'annotation', label: 'Annotation', to: '/annotation', icon: <LayersIcon fontSize="small" /> },
-  { key: 'stats', label: 'Edit Stats', to: '/stats', icon: <StatsIcon fontSize="small" /> },
-] as const;
+const NAV: { key: string; label: string; to: string; icon: ReactNode; perm: Permission }[] = [
+  { key: 'documents', label: 'Filter Table', to: '/documents', icon: <ListIcon fontSize="small" />, perm: 'view_documents' },
+  { key: 'annotation', label: 'Annotation', to: '/annotation', icon: <LayersIcon fontSize="small" />, perm: 'view_annotation' },
+  { key: 'stats', label: 'Edit Stats', to: '/stats', icon: <StatsIcon fontSize="small" />, perm: 'view_stats' },
+  { key: 'users', label: 'Users', to: '/users', icon: <UsersIcon fontSize="small" />, perm: 'manage_users' },
+];
 
 /** Header tabs. Detail page opened from Annotation (ean+batch in URL) counts as Annotation. */
 function NavTabs() {
   const { pathname } = useLocation();
   const [params] = useSearchParams();
-  const active = pathname.startsWith('/stats')
+  const { can } = useAccess();
+  const active = pathname.startsWith('/users')
+    ? 'users'
+    : pathname.startsWith('/stats')
     ? 'stats'
     : pathname.startsWith('/annotation') || (pathname.startsWith('/documents/') && params.get('ean'))
       ? 'annotation'
       : 'documents';
   return (
     <Box component="nav" aria-label="Main" sx={{ display: 'flex', gap: 0.5, justifySelf: 'center' }}>
-      {NAV.map((n) => {
+      {NAV.filter((n) => can(n.perm)).map((n) => {
         const on = active === n.key;
         return (
           <Button

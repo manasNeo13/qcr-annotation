@@ -1,0 +1,293 @@
+/**
+ * User management (Mongo only). `users` is SHARED with the main QCR app → edits apply there too (user decision).
+ * Role permissions live in `annotation_roles` (this app only); every change logged to `annotation_audit`.
+ *
+ * Roles are grouped case-insensitively (roleKey): "store_manager" + "Store_manager" = one role.
+ * Blank / "1" = No role. Deleting a role sets its users' role to '' (No role).
+ */
+import { ObjectId } from 'mongodb';
+import { HttpError } from '../lib/httpError.js';
+import {
+  DEFAULT_PERMISSIONS,
+  NO_ROLE_LABEL,
+  PERMISSIONS,
+  isLockedRole,
+  roleKey,
+} from '../lib/permissions.js';
+import { clearAccessCache, getDb } from './mongo.js';
+
+const col = (n) => getDb().collection(n);
+const users = () => col('users');
+const roles = () => col('annotation_roles');
+const audit = () => col('annotation_audit');
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// ── Permission lookup (per request) ──────────────────────────────────────
+const TTL_MS = 30_000;
+let rolesCache = null; // { at, byKey: Map<key, doc> }
+const userCache = new Map(); // userId → { at, role, active }
+
+async function roleDocs() {
+  if (rolesCache && Date.now() - rolesCache.at < TTL_MS) return rolesCache.byKey;
+  const docs = await roles().find({}).toArray();
+  rolesCache = { at: Date.now(), byKey: new Map(docs.map((d) => [d.key, d])) };
+  return rolesCache.byKey;
+}
+
+const permsOf = (key, doc) =>
+  isLockedRole(key) ? [...PERMISSIONS] : doc ? PERMISSIONS.filter((p) => doc.permissions?.includes(p)) : [...DEFAULT_PERMISSIONS];
+
+function clearCaches(userId) {
+  rolesCache = null;
+  if (userId) userCache.delete(userId);
+  else userCache.clear();
+}
+
+/** Current role + permissions from DB (role may change after login). Cached 30s. */
+export async function permissionsFor(userId) {
+  let u = userCache.get(userId);
+  if (!u || Date.now() - u.at > TTL_MS) {
+    const doc = await users().findOne({ id: userId }, { projection: { role: 1, status: 1 } });
+    u = { at: Date.now(), role: doc?.role ?? '', active: !!doc && doc.status !== false };
+    userCache.set(userId, u);
+  }
+  if (!u.active) throw new HttpError(401, 'Account not active');
+  const key = roleKey(u.role);
+  const doc = (await roleDocs()).get(key);
+  return { role: key ? String(u.role).trim() : NO_ROLE_LABEL, roleKey: key, permissions: permsOf(key, doc) };
+}
+
+// ── Audit ────────────────────────────────────────────────────────────────
+async function log(by, action, target, changes = {}) {
+  await audit().insertOne({ at: new Date(), by: { id: by.id, name: by.name }, action, target, changes });
+}
+
+/** {field: {from, to}} for fields that differ. */
+function diff(before, after) {
+  const out = {};
+  for (const k of Object.keys(after)) {
+    const a = before[k];
+    const b = after[k];
+    if (JSON.stringify(a ?? null) !== JSON.stringify(b ?? null)) out[k] = { from: a ?? null, to: b ?? null };
+  }
+  return out;
+}
+
+export async function listAudit({ page, pageSize }) {
+  const [total, items] = await Promise.all([
+    audit().countDocuments(),
+    audit().find({}).sort({ at: -1, _id: -1 }).skip((page - 1) * pageSize).limit(pageSize).toArray(),
+  ]);
+  return {
+    total,
+    items: items.map((d) => ({
+      id: String(d._id),
+      at: d.at?.toISOString?.() ?? null,
+      by: d.by,
+      action: d.action,
+      target: d.target,
+      changes: d.changes ?? {},
+    })),
+  };
+}
+
+// ── Stores (for user assignment) ─────────────────────────────────────────
+export async function storeOptions() {
+  const [st, wh] = await Promise.all([
+    col('store').find({}, { projection: { _id: 0, id: 1, name: 1, city: 1 } }).toArray(),
+    col('warehouse').find({}, { projection: { _id: 0, id: 1, name: 1, city: 1 } }).toArray(),
+  ]);
+  const map = (kind) => (s) => ({ id: String(s.id), name: String(s.name ?? s.id), city: String(s.city ?? '').trim(), kind });
+  return [...st.filter((s) => s.id).map(map('store')), ...wh.filter((s) => s.id).map(map('warehouse'))].sort(
+    (a, b) => a.kind.localeCompare(b.kind) || a.name.localeCompare(b.name),
+  );
+}
+
+// ── Users ────────────────────────────────────────────────────────────────
+const storesOf = (u) => (Array.isArray(u.format_id) ? u.format_id : u.format_id ? [u.format_id] : []).map(String);
+/** Users are addressed by `id`; the one legacy doc without id by its _id. */
+const keyOf = (u) => (u.id != null && u.id !== '' ? String(u.id) : String(u._id));
+const byKey = (key) => (ObjectId.isValid(key) && String(new ObjectId(key)) === key ? { $or: [{ id: key }, { _id: new ObjectId(key) }] } : { id: key });
+
+const toUser = (u) => ({
+  key: keyOf(u),
+  id: u.id != null ? String(u.id) : '',
+  name: String(u.name ?? ''),
+  email: String(u.email ?? ''),
+  phone: String(u.number ?? u.phone_number ?? ''),
+  role: roleKey(u.role) ? String(u.role).trim() : '',
+  roleKey: roleKey(u.role),
+  active: u.status !== false,
+  stores: storesOf(u),
+  hasPassword: !!u.password,
+  createdAt: (u.createdAt instanceof Date ? u.createdAt : u.timestamp instanceof Date ? u.timestamp : null)?.toISOString() ?? null,
+});
+
+/** Editable snapshot (for audit diff). */
+const snap = (u) => ({ name: u.name, email: u.email, phone: u.phone, role: u.role, active: u.active, stores: u.stores });
+
+export async function listUsers({ q, role, status, page, pageSize }) {
+  const all = (await users().find({}).toArray()).map(toUser); // toUser never exposes the hash
+  const term = q.trim().toLowerCase();
+  const rows = all
+    .filter((u) => (role === undefined ? true : u.roleKey === role))
+    .filter((u) => (status === 'all' ? true : status === 'active' ? u.active : !u.active))
+    .filter((u) => !term || [u.name, u.id, u.email, u.phone].some((v) => v.toLowerCase().includes(term)))
+    .sort((a, b) => Number(b.active) - Number(a.active) || a.name.localeCompare(b.name));
+  return { items: rows.slice((page - 1) * pageSize, page * pageSize), total: rows.length };
+}
+
+async function assertEmailFree(email, exceptKey) {
+  if (!email) return;
+  const found = await users().find({ email: new RegExp(`^${escapeRe(email)}$`, 'i') }, { projection: { id: 1 } }).toArray();
+  if (found.some((u) => keyOf(u) !== exceptKey)) throw new HttpError(409, 'Email already used by another user');
+}
+
+/** Stored spelling for a role key: existing users' most common spelling, else role doc name. */
+async function roleName(key) {
+  if (!key) return '';
+  const doc = (await roleDocs()).get(key);
+  const spellings = await users()
+    .aggregate([{ $match: { role: { $type: 'string' } } }, { $group: { _id: '$role', n: { $sum: 1 } } }])
+    .toArray();
+  const best = spellings.filter((s) => roleKey(s._id) === key).sort((a, b) => b.n - a.n)[0];
+  if (best) return String(best._id).trim();
+  if (doc) return doc.name;
+  throw new HttpError(400, 'Unknown role');
+}
+
+export async function createUser(data, by) {
+  const id = data.id.trim();
+  if (await users().findOne({ $or: [{ id }, { user_id: id }] })) throw new HttpError(409, 'User ID already exists');
+  await assertEmailFree(data.email);
+  const now = new Date();
+  const role = await roleName(roleKey(data.role));
+  // Same shape as main app users (format_id = assigned stores, warehouse_id = first one, user_id = id).
+  const doc = {
+    id,
+    user_id: id,
+    name: data.name,
+    email: data.email,
+    number: data.phone,
+    role,
+    status: data.active,
+    format_id: data.stores,
+    warehouse_id: data.stores[0] ?? '',
+    timestamp: now,
+    createdAt: now,
+    updatedAt: now,
+    __v: 0,
+  };
+  await users().insertOne(doc);
+  const out = toUser(doc);
+  await log(by, 'user.create', { type: 'user', id: out.key, name: out.name }, diff({}, snap(out)));
+  return out;
+}
+
+export async function updateUser(key, data, by) {
+  const cur = await users().findOne(byKey(key));
+  if (!cur) throw new HttpError(404, 'User not found');
+  const before = toUser(cur);
+  const self = before.key === by.id;
+  const nextRoleKey = roleKey(data.role);
+  // No lock-out: admins can't demote or deactivate themselves.
+  if (self && nextRoleKey !== before.roleKey) throw new HttpError(400, 'You cannot change your own role');
+  if (self && !data.active) throw new HttpError(400, 'You cannot deactivate yourself');
+  await assertEmailFree(data.email, before.key);
+  const role = nextRoleKey === before.roleKey ? before.role : await roleName(nextRoleKey);
+  const after = { ...before, name: data.name, email: data.email, phone: data.phone, role, roleKey: nextRoleKey, active: data.active, stores: data.stores };
+  const changes = diff(snap(before), snap(after));
+  if (!Object.keys(changes).length) return before;
+  const set = { name: data.name, email: data.email, number: data.phone, role, status: data.active, format_id: data.stores, updatedAt: new Date() };
+  // Keep main app's warehouse_id in step when it mirrored the first store.
+  if (changes.stores && (!cur.warehouse_id || cur.warehouse_id === before.stores[0])) set.warehouse_id = data.stores[0] ?? '';
+  await users().updateOne({ _id: cur._id }, { $set: set });
+  clearCaches(before.id);
+  clearAccessCache(before.id);
+  await log(by, 'user.update', { type: 'user', id: before.key, name: after.name }, changes);
+  return after;
+}
+
+// ── Roles ────────────────────────────────────────────────────────────────
+/** All roles: from users (grouped) + custom docs, with permissions + user count. */
+export async function listRoles() {
+  const [groups, docs] = await Promise.all([
+    users().aggregate([{ $group: { _id: '$role', n: { $sum: 1 } } }]).toArray(),
+    roleDocs(),
+  ]);
+  const byKey = new Map(); // key → { spellings: [{name,n}], users }
+  for (const g of groups) {
+    const key = roleKey(g._id);
+    const r = byKey.get(key) ?? { spellings: [], users: 0 };
+    if (key) r.spellings.push({ name: String(g._id).trim(), n: g.n });
+    r.users += g.n;
+    byKey.set(key, r);
+  }
+  for (const key of docs.keys()) if (!byKey.has(key)) byKey.set(key, { spellings: [], users: 0 });
+  if (!byKey.has('')) byKey.set('', { spellings: [], users: 0 });
+  return [...byKey.entries()]
+    .map(([key, r]) => {
+      const doc = docs.get(key);
+      const spellings = r.spellings.sort((a, b) => b.n - a.n).map((s) => s.name);
+      return {
+        key,
+        name: key ? (spellings[0] ?? doc?.name ?? key) : NO_ROLE_LABEL,
+        variants: spellings,
+        permissions: permsOf(key, doc),
+        users: r.users,
+        locked: isLockedRole(key),
+        custom: !!doc?.custom,
+        deletable: !!key && !isLockedRole(key),
+      };
+    })
+    // Admin roles first, No role last, rest by user count.
+    .sort((a, b) => {
+      const rank = (r) => (r.locked ? 0 : r.key === '' ? 2 : 1);
+      return rank(a) - rank(b) || b.users - a.users || a.name.localeCompare(b.name);
+    });
+}
+
+export async function createRole({ name, permissions }, by) {
+  const key = roleKey(name);
+  if (!key) throw new HttpError(400, 'Enter a role name');
+  if (isLockedRole(key) || (await listRoles()).some((r) => r.key === key)) throw new HttpError(409, 'Role already exists');
+  const perms = PERMISSIONS.filter((p) => permissions.includes(p));
+  await roles().insertOne({ key, name: name.trim(), permissions: perms, custom: true, createdAt: new Date(), createdBy: by.name, updatedAt: new Date() });
+  clearCaches();
+  await log(by, 'role.create', { type: 'role', id: key, name: name.trim() }, { permissions: { from: null, to: perms } });
+  return (await listRoles()).find((r) => r.key === key);
+}
+
+export async function updateRolePermissions(key, permissions, by) {
+  if (isLockedRole(key)) throw new HttpError(400, 'Admin roles always have full access');
+  const all = await listRoles();
+  const role = all.find((r) => r.key === key);
+  if (!role) throw new HttpError(404, 'Role not found');
+  const perms = PERMISSIONS.filter((p) => permissions.includes(p));
+  await roles().updateOne(
+    { key },
+    { $set: { permissions: perms, updatedAt: new Date(), updatedBy: by.name }, $setOnInsert: { key, name: role.name, custom: false, createdAt: new Date() } },
+    { upsert: true },
+  );
+  clearCaches();
+  await log(by, 'role.update', { type: 'role', id: key, name: role.name }, { permissions: { from: role.permissions, to: perms } });
+  return { ...role, permissions: perms };
+}
+
+/** Delete role → its users become No role (role ''). */
+export async function deleteRole(key, by) {
+  if (!key || isLockedRole(key)) throw new HttpError(400, 'This role cannot be deleted');
+  const role = (await listRoles()).find((r) => r.key === key);
+  if (!role) throw new HttpError(404, 'Role not found');
+  const affected = (await users().find({ role: { $type: 'string' } }, { projection: { _id: 1, id: 1, role: 1 } }).toArray()).filter(
+    (u) => roleKey(u.role) === key,
+  );
+  if (affected.some((u) => keyOf(u) === by.id)) throw new HttpError(400, 'You cannot delete your own role');
+  if (affected.length)
+    await users().updateMany({ _id: { $in: affected.map((u) => u._id) } }, { $set: { role: '', updatedAt: new Date() } });
+  await roles().deleteOne({ key });
+  clearCaches();
+  clearAccessCache();
+  await log(by, 'role.delete', { type: 'role', id: key, name: role.name }, { users: { from: affected.length, to: 0 } });
+  return { moved: affected.length };
+}

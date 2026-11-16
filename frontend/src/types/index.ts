@@ -1,3 +1,5 @@
+import type { Permission } from '../utils/permissions';
+
 export type DocStatus = 'ok' | 'near_expiry' | 'expired';
 export type StatusFilter = DocStatus | 'all';
 
@@ -171,4 +173,69 @@ export interface EditStats {
   byDay: DayStats[];
   annotators: AnnotatorStats[];
   rows?: StatsRow[];
+}
+
+// ── Access + user management ─────────────────────────────────────────────
+/** GET /auth/me: current user + role + permissions (fresh from DB). */
+export interface Me extends User {
+  role: string;
+  roleKey: string;
+  permissions: Permission[];
+}
+
+export interface AdminUser {
+  key: string; // address for PATCH (id, or _id for legacy doc)
+  id: string;
+  name: string;
+  email: string;
+  phone: string;
+  role: string; // stored spelling; '' = No role
+  roleKey: string;
+  active: boolean;
+  stores: string[];
+  hasPassword: boolean;
+  createdAt: string | null;
+}
+
+export interface AdminUserInput {
+  name: string;
+  email: string;
+  phone: string;
+  role: string;
+  active: boolean;
+  stores: string[];
+}
+
+export interface StoreOption {
+  id: string;
+  name: string;
+  city: string;
+  kind: 'store' | 'warehouse';
+}
+
+export interface RoleInfo {
+  key: string; // '' = No role
+  name: string;
+  variants: string[]; // spellings merged into this role
+  permissions: Permission[];
+  users: number;
+  locked: boolean;
+  custom: boolean;
+  deletable: boolean;
+}
+
+export interface AuditEntry {
+  id: string;
+  at: string | null;
+  by: { id: string; name: string };
+  action: 'user.create' | 'user.update' | 'role.create' | 'role.update' | 'role.delete';
+  target: { type: 'user' | 'role'; id: string; name: string };
+  changes: Record<string, { from: unknown; to: unknown }>;
+}
+
+export interface Paged<T> {
+  items: T[];
+  total: number;
+  page: number;
+  pageSize: number;
 }

@@ -4,7 +4,9 @@
  * Delete once the real backend is wired.
  */
 import dayjs from 'dayjs';
+import { PERMISSIONS } from '../utils/permissions';
 import type {
+  Me,
   DayCounts,
   DayScope,
   ListFilter,
@@ -147,6 +149,11 @@ function filterDocs({ q = '', from, to, ean, batch }: ListFilter) {
 }
 
 export const mockApi = {
+  /** Mock user = admin (all permissions). */
+  async getMe(): Promise<Me> {
+    return { id: 'u_mock', name: 'Annotator', email: 'mock@neoqcr.com', role: 'NHQ', roleKey: 'nhq', permissions: [...PERMISSIONS] };
+  },
+
   async login(email: string, password: string): Promise<LoginResponse> {
     await delay(500);
     if (!email || !password) throw new ApiError('Email and password are required', 400);
@@ -244,7 +251,7 @@ export const mockApi = {
     return computeEditStats(docs, { detail, dayOf: (iso) => dayjs(iso).format('YYYY-MM-DD') });
   },
 
-  /** Stats drill-down. Capture day = createdAt (same as getStats). Newest edit first. */
+  /** Stats drill-down. Capture day = createdAt (same as getStats). Newest capture first (stable after save). */
   async listEdited({ page, pageSize, status = 'all', q = '', from, to, changed = 'any', editor }: ListParams): Promise<ListResponse> {
     await delay();
     const day = (d: DocumentItem) => dayjs(d.createdAt).format('YYYY-MM-DD');
@@ -260,7 +267,7 @@ export const mockApi = {
     const counts: Record<StatusFilter, number> = { all: matched.length, ok: 0, near_expiry: 0, expired: 0 };
     matched.forEach((d) => counts[d.status]++);
     const rows = (status === 'all' ? matched : matched.filter((d) => d.status === status)).sort(
-      (a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id),
+      (a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id),
     );
     const start = (page - 1) * pageSize;
     return { items: rows.slice(start, start + pageSize), total: rows.length, page, pageSize, counts };

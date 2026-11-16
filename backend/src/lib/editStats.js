@@ -78,7 +78,8 @@ export function editedPage(docs, { changed, editor, status = 'all', page = 1, pa
   const counts = { all: matched.length, ok: 0, near_expiry: 0, expired: 0 };
   for (const d of matched) counts[d.status]++;
   const rows = (status === 'all' ? matched : matched.filter((d) => d.status === status)).sort(
-    (a, b) => b.updatedAt.localeCompare(a.updatedAt) || b.id.localeCompare(a.id),
+    // Capture time (newest first) — stable: saving a capture never reorders the list.
+    (a, b) => b.createdAt.localeCompare(a.createdAt) || b.id.localeCompare(a.id),
   );
   const items = Number.isFinite(pageSize) ? rows.slice((page - 1) * pageSize, page * pageSize) : rows;
   return { items, total: rows.length, counts };

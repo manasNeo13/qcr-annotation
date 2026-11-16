@@ -39,6 +39,8 @@ interface Props {
   emptyActions?: ReactNode;
   /** Edit drill-down: show original value (struck) above changed values + who edited. */
   showEdits?: boolean;
+  /** Don't jump to page top on page change (caller scrolls itself). */
+  keepScroll?: boolean;
 }
 
 const SHOW: Record<EditField, (m: DocMetadata) => string> = {
@@ -78,6 +80,7 @@ export default function DocumentTable({
   onOpen,
   emptyActions,
   showEdits,
+  keepScroll,
 }: Props) {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
@@ -282,7 +285,7 @@ export default function DocumentTable({
       )}
 
       {!isError && (data?.total ?? 0) > 0 && (
-        <Pager count={data?.total ?? 0} page={page} pageSize={pageSize} onPage={onPage} />
+        <Pager count={data?.total ?? 0} page={page} pageSize={pageSize} onPage={onPage} keepScroll={keepScroll} />
       )}
     </>
   );
@@ -294,11 +297,13 @@ export function Pager({
   page,
   pageSize,
   onPage,
+  keepScroll,
 }: {
   count: number;
   page: number;
   pageSize: number;
   onPage: (page: number) => void;
+  keepScroll?: boolean;
 }) {
   return (
     <TablePagination
@@ -309,7 +314,7 @@ export function Pager({
       rowsPerPageOptions={[]}
       onPageChange={(_, p) => {
         onPage(p + 1);
-        window.scrollTo({ top: 0, behavior: 'smooth' });
+        if (!keepScroll) window.scrollTo({ top: 0, behavior: 'smooth' });
       }}
       sx={{
         borderTop: `1px solid ${colors.border}`,

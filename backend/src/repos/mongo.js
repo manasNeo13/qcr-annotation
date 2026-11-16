@@ -22,10 +22,14 @@ const ACCESS_TTL_MS = 60_000;
 let client;
 let db;
 const col = (n) => db.collection(n);
+/** Raw db handle for sibling modules (repos/admin.js). */
+export const getDb = () => db;
 const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
 // ── Access ────────────────────────────────────────────────────────────────
 const accessCache = new Map(); // userId → { at, rows, envIds }
+/** Drop cached store scope (user's stores/role/status changed). No id = everyone. */
+export const clearAccessCache = (userId) => (userId ? accessCache.delete(userId) : accessCache.clear());
 
 /** Stores + warehouses the user may see (mirrors main app services/userAccess.js). */
 async function allowedStores(userId) {

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { Link as RouterLink, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import toast from 'react-hot-toast';
 import { Alert, Box, Button, CircularProgress, IconButton, Paper, Skeleton, Tooltip, Typography } from '@mui/material';
 import ArrowBackIcon from '@mui/icons-material/ArrowBack';
@@ -10,12 +10,13 @@ import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import { api } from '../api';
 import { useAuth } from '../auth/AuthContext';
+import { useAccess } from '../auth/useAccess';
 import HistoryPanel from '../components/HistoryPanel';
 import ImageViewer from '../components/ImageViewer';
 import MetadataForm from '../components/MetadataForm';
 import StatusChip from '../components/StatusChip';
 import PageBreadcrumbs, { type Crumb } from '../components/PageBreadcrumbs';
-import { readFilter, statsPath } from '../hooks/useListState';
+import { readDay, readFilter, statsPath } from '../hooks/useListState';
 import type { DocMetadata, DocumentItem } from '../types';
 import { annotationPath, batchLabel, eanLabel } from '../utils/annotation';
 import { formatDate, formatDateTime, formatMRP } from '../utils/format';
@@ -64,7 +65,11 @@ function DocumentDetail({ id }: { id: string }) {
   const ean = params.get('ean') ?? undefined;
   const batch = params.get('batch') ?? undefined;
   const fromAnnotation = !!(ean && batch);
-  const filter = { ...readFilter(params), ean, batch };
+  // Edit Stats "By capture day" drill → that single day.
+  const day = readDay(params);
+  const base = readFilter(params);
+  const filter = { ...base, ...(day && base.changed ? { from: day, to: day } : {}), ean, batch };
+  const fromStats = !fromAnnotation && !!filter.changed;
   const listSearch = params.toString();
   // Back target = list this capture was opened from.
   const listParams = new URLSearchParams(params);
@@ -72,7 +77,9 @@ function DocumentDetail({ id }: { id: string }) {
   listParams.delete('batch');
   const backTo = fromAnnotation
     ? annotationPath(ean, batch, listParams)
-    : `/documents${listSearch ? `?${listSearch}` : ''}`;
+    : fromStats
+      ? statsPath(params)
+      : `/documents${listSearch ? `?${listSearch}` : ''}`;
   const upParams = new URLSearchParams(listParams);
   upParams.delete('page');
   upParams.delete('q');
@@ -83,13 +90,13 @@ function DocumentDetail({ id }: { id: string }) {
         { label: `Batch ${batchLabel(batch!)}`, to: backTo },
         { label: 'Capture' },
       ]
-    : [
-        ...(filter.changed ? [{ label: 'Edit Stats', to: statsPath(listParams) }] : []),
-        { label: 'Filter Table', to: backTo },
-        { label: 'Capture' },
-      ];
+    : fromStats
+      ? [{ label: 'Edit Stats', to: backTo }, { label: 'Capture' }]
+      : [{ label: 'Filter Table', to: backTo }, { label: 'Capture' }];
   const qc = useQueryClient();
   const { user } = useAuth();
+  const { can } = useAccess();
+  const canEdit = can('edit_capture');
   const [editing, setEditing] = useState(false);
   const [dirty, setDirty] = useState(false);
   const onDirtyChange = useCallback((d: boolean) => setDirty(d), []);
@@ -119,22 +126,22 @@ function DocumentDetail({ id }: { id: string }) {
     onError: (e: Error) => toast.error(e.message || 'Update failed'),
   });
 
+  // No placeholder: previous capture's prev/next must never drive this one (caused skips 2 → 4).
   const { data: nav } = useQuery({
     queryKey: ['neighbors', id, filter],
     queryFn: () => api.getNeighbors(id, filter),
-    placeholderData: keepPreviousData,
   });
 
-  // Warm next/prev so stepping feels instant.
+  // Warm next/prev capture + their neighbors so stepping feels instant.
+  const filterKey = JSON.stringify(filter);
   useEffect(() => {
+    const f = JSON.parse(filterKey);
     for (const nid of [nav?.nextId, nav?.prevId]) {
-      if (nid)
-        qc.prefetchQuery({
-          queryKey: ['document', nid],
-          queryFn: () => api.getDocument(nid),
-        });
+      if (!nid) continue;
+      qc.prefetchQuery({ queryKey: ['document', nid], queryFn: () => api.getDocument(nid) });
+      qc.prefetchQuery({ queryKey: ['neighbors', nid, f], queryFn: () => api.getNeighbors(nid, f) });
     }
-  }, [nav?.nextId, nav?.prevId, qc]);
+  }, [nav?.nextId, nav?.prevId, filterKey, qc]);
 
   const go = useCallback(
     (target: string | null | undefined) => {
@@ -329,11 +336,11 @@ function DocumentDetail({ id }: { id: string }) {
                   Submit
                 </Button>
               </>
-            ) : (
+            ) : canEdit ? (
               <Button variant="contained" startIcon={<EditIcon />} onClick={() => setEditing(true)} disabled={!doc}>
                 Edit
               </Button>
-            )}
+            ) : null}
           </Box>
         </Box>
       </Box>

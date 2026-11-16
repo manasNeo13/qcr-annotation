@@ -10,7 +10,7 @@ const isStatus = (v: string | null): v is StatusFilter => FILTERS.some((f) => f.
 const DEFAULTS: Record<string, string> = { page: '1', status: 'all', q: '' };
 
 /** URL keys that describe the list view (carried into drill-down + detail page). */
-export const VIEW_KEYS = ['q', 'status', 'from', 'to', 'all', 'client', 'changed', 'editor'] as const;
+export const VIEW_KEYS = ['q', 'status', 'from', 'to', 'all', 'client', 'changed', 'editor', 'day'] as const;
 const EDIT_KEYS: EditKey[] = ['batch', 'mrp', 'mfd', 'expiry', 'any'];
 const isEditKey = (v: string | null): v is EditKey => EDIT_KEYS.includes(v as EditKey);
 
@@ -25,11 +25,17 @@ export function carryParams(params: URLSearchParams, drop: string[] = [], extra:
   return next;
 }
 
-/** Edit Stats link keeping date range + client (breadcrumb back from drill-down). */
+/** Edit Stats link keeping date range + client + open drill-down section (changed/editor/day/page). */
 export function statsPath(params: URLSearchParams) {
-  const s = carryParams(params, ['q', 'status', 'changed', 'editor']).toString();
+  const s = carryParams(params, ['q', 'status'], params.get('page') ? { page: params.get('page')! } : {}).toString();
   return `/stats${s ? `?${s}` : ''}`;
 }
+
+/** Edit Stats drill-down day (single capture day picked in "By capture day" table). */
+export const readDay = (params: URLSearchParams) => {
+  const d = params.get('day');
+  return d && /^\d{4}-\d{2}-\d{2}$/.test(d) ? d : undefined;
+};
 
 /** Reads list filters from URL (shared by Documents + Annotation pages). */
 export function readFilter(params: URLSearchParams, scoped = true): ListFilter {
@@ -67,10 +73,11 @@ export function useListState({ scoped = true }: { scoped?: boolean } = {}) {
     setParams(next, { replace: true });
   };
 
-  const setRange = (a?: string, b?: string) =>
-    update(
-      a ? { from: a, to: b && b !== a ? b : null, all: null, page: 1 } : { from: null, to: null, all: '1', page: 1 },
-    );
+  const setRange = (a?: string, b?: string, extra: Record<string, string | null> = {}) =>
+    update({
+      ...(a ? { from: a, to: b && b !== a ? b : null, all: null, page: 1 } : { from: null, to: null, all: '1', page: 1 }),
+      ...extra,
+    });
 
   const today = dayjs().format('YYYY-MM-DD');
   const scope: DayScope = { client: filter.client };
