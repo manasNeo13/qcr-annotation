@@ -31,7 +31,7 @@ import LockIcon from '@mui/icons-material/LockOutlined';
 import { adminApi } from '../../api/admin';
 import { colors } from '../../theme';
 import type { RoleInfo } from '../../types';
-import { DEFAULT_PERMISSIONS, PERMISSIONS, PERMISSION_INFO, type Permission } from '../../utils/permissions';
+import { DEFAULT_PERMISSIONS, PERMISSION_INFO, ROLE_PERMISSIONS, type Permission } from '../../utils/permissions';
 import { ADMIN_KEYS } from './keys';
 
 /** New role: name + permission checkboxes (defaults: everything except Manage users). */
@@ -70,7 +70,7 @@ function NewRoleDialog({ open, onClose }: { open: boolean; onClose: () => void }
             sx={{ mt: 1 }}
           />
           <Typography sx={{ fontSize: 13, fontWeight: 700, color: colors.muted, mt: 0.5 }}>Permissions</Typography>
-          {PERMISSIONS.map((p) => (
+          {ROLE_PERMISSIONS.map((p) => (
             <FormControlLabel
               key={p}
               control={<Checkbox checked={perms.includes(p)} onChange={() => toggle(p)} />}
@@ -174,7 +174,7 @@ export default function RolesTab() {
     <>
       <Box sx={{ p: { xs: 1.5, sm: 2 }, display: 'flex', flexWrap: 'wrap', gap: 1, alignItems: 'center' }}>
         <Typography sx={{ fontSize: 13, color: colors.muted, flex: '1 1 300px' }}>
-          Tick to allow. Changes save instantly and apply within a minute. NHQ / Admin always have full access. Roles with
+          Tick to allow. Changes save instantly and apply within a minute. NHQ / Admin always have full access (only NHQ can manage users). Roles with
           different spellings (e.g. store_manager / Store_manager) are shown as one.
         </Typography>
         <Button variant="contained" startIcon={<AddIcon />} onClick={() => setCreating(true)}>
@@ -200,7 +200,7 @@ export default function RolesTab() {
               <TableRow>
                 <TableCell>Role</TableCell>
                 <TableCell align="right">Users</TableCell>
-                {PERMISSIONS.map((p) => (
+                {ROLE_PERMISSIONS.map((p) => (
                   <TableCell key={p} align="center" sx={{ whiteSpace: 'nowrap' }}>
                     <Tooltip title={PERMISSION_INFO[p].hint}>
                       <span>{PERMISSION_INFO[p].label}</span>
@@ -214,7 +214,7 @@ export default function RolesTab() {
               {isLoading
                 ? Array.from({ length: 6 }).map((_, i) => (
                     <TableRow key={i}>
-                      <TableCell colSpan={PERMISSIONS.length + 3}>
+                      <TableCell colSpan={ROLE_PERMISSIONS.length + 3}>
                         <Skeleton height={32} />
                       </TableCell>
                     </TableRow>
@@ -236,7 +236,7 @@ export default function RolesTab() {
                         )}
                       </TableCell>
                       <TableCell align="right">{r.users}</TableCell>
-                      {PERMISSIONS.map((p) => (
+                      {ROLE_PERMISSIONS.map((p) => (
                         <TableCell key={p} align="center" sx={{ py: 0 }}>
                           <Checkbox
                             size="small"

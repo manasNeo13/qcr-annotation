@@ -20,6 +20,7 @@ import DownloadIcon from '@mui/icons-material/FileDownloadOutlined';
 import { api } from '../api';
 import type { EditStats, StatsFilter } from '../types';
 import { colors } from '../theme';
+import { clientLabel } from '../utils/clients';
 import { rangeLabel } from '../utils/format';
 import { annotatorLines, type Cell, dayLines, detailLines, downloadCsv, summaryLines, toCsv } from '../utils/editStats';
 
@@ -75,7 +76,7 @@ export default function ExportStatsDialog({ open, onClose, filter, stats }: Prop
       const range = rangeLabel(filter.from, filter.to);
       const head: Cell[][] = [
         ['Edit stats', range],
-        ['Client', filter.client || 'All clients'],
+        ['Client', filter.client ? clientLabel(filter.client) : 'All clients'],
         ...(annotator ? [['Annotator', annotator]] : []),
         [],
       ];
@@ -104,7 +105,7 @@ export default function ExportStatsDialog({ open, onClose, filter, stats }: Prop
       <DialogTitle sx={{ fontWeight: 700, pb: 0.5 }}>Export CSV</DialogTitle>
       <DialogContent>
         <Typography sx={{ color: colors.muted, mb: 2 }}>
-          {rangeLabel(filter.from, filter.to)} · {filter.client || 'All clients'}
+          {rangeLabel(filter.from, filter.to)} · {filter.client ? clientLabel(filter.client) : 'All clients'}
         </Typography>
 
         <Typography variant="h6" sx={{ mb: 0.5 }}>

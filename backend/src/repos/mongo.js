@@ -2,7 +2,7 @@
  * MongoDB repo over the main QCR app collections.
  *   environment — one doc per capture (env_id, store_id, …)
  *   metadata    — OCR reads, several per capture; row values = first non-null by newest timestamp
- *   users       — login (scrypt), store access via role + format_id
+ *   users       — login (scrypt); access by assigned clients (users.clients), NHQ sees all
  *   store       — store ids (field `id`)
  * Edits write to the NEWEST metadata doc of a capture; previous values pushed to annotation_history.
  */
@@ -11,12 +11,12 @@ import { MongoClient, ObjectId } from 'mongodb';
 import { env } from '../config/env.js';
 import { SDK_EDITOR, computeEditStats, diffFields, editedPage } from '../lib/editStats.js';
 import { HttpError } from '../lib/httpError.js';
+import { clientsOf, isSuperAdmin, roleKey } from '../lib/permissions.js';
 import { IST_OFFSET_MS, istWindow } from '../lib/istDay.js';
 import { NEAR_EXPIRY_PCT, startOfToday, toISODate } from '../lib/status.js';
 import { NONE_KEY } from '../lib/validation.js';
 import { safeDecode } from '../lib/safeDecode.js';
 
-const ORG_WIDE_ROLES = ['nhq', 'organization admin', 'admin', 'org admin'];
 const ACCESS_TTL_MS = 60_000;
 
 let client;
@@ -31,60 +31,45 @@ const accessCache = new Map(); // userId → { at, rows, envIds }
 /** Drop cached store scope (user's stores/role/status changed). No id = everyone. */
 export const clearAccessCache = (userId) => (userId ? accessCache.delete(userId) : accessCache.clear());
 
-/** Stores + warehouses the user may see (mirrors main app services/userAccess.js). */
-async function allowedStores(userId) {
-  const user = await col('users').findOne({ id: userId }, { projection: { role: 1, format_id: 1, org_id: 1, status: 1 } });
-  if (!user || user.status === false) throw new HttpError(401, 'Account not active');
-  // NOTE: stores currently have no org_id → no org filter when user/org missing.
-  const orgFilter = user.org_id ? { org_id: { $in: [user.org_id, String(user.org_id)] } } : {};
-  const orgStores = await col('store').find(orgFilter, { projection: { _id: 0, id: 1 } }).toArray();
-  const all = orgStores
-    .filter((s) => s.id != null && s.id !== '')
-    .map((s) => ({ id: String(s.id) }));
-  const own = Array.isArray(user.format_id) ? user.format_id : user.format_id ? [user.format_id] : [];
-  const orgWide = ORG_WIDE_ROLES.includes(String(user.role ?? '').trim().toLowerCase());
-  // Warehouses (no org_id in data) → org-wide roles or explicitly assigned ids only.
-  const wh = (await col('warehouse').find({}, { projection: { _id: 0, id: 1 } }).toArray())
-    .filter((w) => w.id != null && w.id !== '' && (orgWide || own.includes(String(w.id))))
-    .map((w) => ({ id: String(w.id), kind: 'warehouse' }));
-  const stores = orgWide ? all : all.filter((s) => own.includes(s.id));
-  return [...stores.map((s) => ({ ...s, kind: 'store' })), ...wh];
-}
+/** Client key of a capture: environment.client_name trimmed + lowercased; '' = no client. */
+const clientKey = (v) => String(v ?? '').trim().toLowerCase();
 
-/** Per-user scope: captures in allowed stores (env_id, client). Cached 1 min. */
+/**
+ * Per-user scope by CLIENT (stores ignored). Cached 1 min.
+ *   NHQ (super admin) → every capture, incl. captures with no client.
+ *   Others → captures whose environment.client_name is in users.clients. None assigned → nothing.
+ * clientKeys: null = all; else Set of client keys → live capture events (services/live.js).
+ */
 async function scope(userId, fresh = false) {
   const hit = accessCache.get(userId);
   if (!fresh && hit && Date.now() - hit.at < ACCESS_TTL_MS) return hit;
-  const stores = await allowedStores(userId);
-  const raw = stores.length
-    ? await col('environment')
-        .find(
-          {
-            $or: [
-              { store_id: { $in: stores.filter((s) => s.kind === 'store').map((s) => s.id) } },
-              { warehouse_id: { $in: stores.filter((s) => s.kind === 'warehouse').map((s) => s.id) } },
-            ],
-          },
-          { projection: { _id: 0, env_id: 1, client_name: 1 } },
-        )
-        .toArray()
-    : [];
+  const user = await col('users').findOne({ id: userId }, { projection: { role: 1, status: 1, clients: 1 } });
+  if (!user || user.status === false) throw new HttpError(401, 'Account not active');
+  const superAdmin = isSuperAdmin(roleKey(user.role));
+  const mine = clientsOf(user).map(clientKey);
+  const raw =
+    superAdmin || mine.length
+      ? await col('environment')
+          .find(superAdmin ? {} : { client_name: { $type: 'string' } }, { projection: { _id: 0, env_id: 1, client_name: 1 } })
+          .toArray()
+      : [];
+  const allowed = new Set(mine);
   const rows = raw
     .filter((r) => r.env_id)
-    .map((r) => ({ env: r.env_id, client: String(r.client_name ?? '').trim().toLowerCase() }));
-  // storeKeys: "store:<id>" / "warehouse:<id>" → live capture events (services/live.js).
-  const s = { at: Date.now(), rows, envIds: rows.map((r) => r.env), storeKeys: new Set(stores.map((x) => `${x.kind}:${x.id}`)) };
+    .map((r) => ({ env: r.env_id, client: clientKey(r.client_name) }))
+    .filter((r) => superAdmin || allowed.has(r.client));
+  const s = { at: Date.now(), rows, envIds: rows.map((r) => r.env), clientKeys: superAdmin ? null : allowed, superAdmin };
   accessCache.set(userId, s);
   return s;
 }
 
 const allowedEnvIds = async (userId) => (await scope(userId)).envIds;
 
-/** Allowed env ids narrowed by client filter. */
+/** Allowed env ids narrowed by client filter. NONE_KEY = captures with no client (super admin only). */
 async function scopedEnvIds(userId, { client } = {}) {
   const s = await scope(userId);
   if (!client) return s.envIds;
-  const c = client.toLowerCase();
+  const c = client === NONE_KEY ? '' : clientKey(client);
   return s.rows.filter((r) => r.client === c).map((r) => r.env);
 }
 
@@ -330,19 +315,14 @@ export const mongoRepo = {
       return docs.map(liveDoc);
     },
 
-    /** env_id → store keys ("store:X" / "warehouse:Y"). Missing env = not in map. */
+    /** env_id → access keys ["client:<key>"] ('' = no client). Missing env = not in map. */
     async storesOf(envIds) {
       const map = new Map();
       if (!envIds.length) return map;
       const rows = await col('environment')
-        .find({ env_id: { $in: envIds } }, { projection: { _id: 0, env_id: 1, store_id: 1, warehouse_id: 1 } })
+        .find({ env_id: { $in: envIds } }, { projection: { _id: 0, env_id: 1, client_name: 1 } })
         .toArray();
-      for (const r of rows) {
-        const keys = [];
-        if (r.store_id != null && r.store_id !== '') keys.push(`store:${r.store_id}`);
-        if (r.warehouse_id != null && r.warehouse_id !== '') keys.push(`warehouse:${r.warehouse_id}`);
-        map.set(r.env_id, keys);
-      }
+      for (const r of rows) map.set(r.env_id, [`client:${clientKey(r.client_name)}`]);
       return map;
     },
 
@@ -376,10 +356,11 @@ export const mongoRepo = {
       clearAccessCache();
     },
 
-    /** Events this user may see (same store scope as lists). Throws 401 if account inactive. */
+    /** Events this user may see (same client scope as lists). Throws 401 if account inactive. */
     async visibleTo(user, events) {
-      const { storeKeys } = await scope(user.id);
-      return events.filter((e) => e.stores.some((k) => storeKeys.has(k)));
+      const { clientKeys } = await scope(user.id);
+      if (!clientKeys) return events; // super admin
+      return events.filter((e) => e.stores.some((k) => k.startsWith('client:') && clientKeys.has(k.slice(7))));
     },
   },
 
@@ -388,7 +369,7 @@ export const mongoRepo = {
     async findForLogin(email) {
       const found = await col('users')
         .find({ email: new RegExp(`^${escapeRe(email)}$`, 'i'), password: { $exists: true } })
-        .project({ id: 1, name: 1, email: 1, password: 1, status: 1, role: 1 })
+        .project({ id: 1, name: 1, email: 1, password: 1, status: 1, role: 1, must_change_password: 1 })
         .limit(2)
         .toArray();
       if (found.length > 1) throw new HttpError(409, 'Multiple accounts use this email — contact admin');
@@ -401,7 +382,23 @@ export const mongoRepo = {
         role: u.role != null ? String(u.role) : '',
         active: u.status !== false,
         passwordHash: String(u.password ?? ''),
+        mustChangePassword: u.must_change_password === true,
       };
+    },
+
+    /** Stored hash for password change (null = no user / no password). */
+    async passwordHashOf(userId) {
+      const u = await col('users').findOne({ id: userId }, { projection: { password: 1, status: 1 } });
+      if (!u || u.status === false) throw new HttpError(401, 'Account not active');
+      return u.password ? String(u.password) : null;
+    },
+
+    /** User sets own password → clears the "change on first login" flag. */
+    async setOwnPassword(userId, hash) {
+      await col('users').updateOne(
+        { id: userId },
+        { $set: { password: hash, must_change_password: false, password_changed_at: new Date(), updatedAt: new Date() } },
+      );
     },
   },
 
@@ -471,10 +468,13 @@ export const mongoRepo = {
       };
     },
 
-    /** Dropdown options within user scope. */
+    /** Dropdown options within user scope. noClient = captures without client exist (super admin only). */
     async filterOptions(user) {
       const s = await scope(user.id);
-      return { clients: [...new Set(s.rows.map((r) => r.client).filter(Boolean))].sort((x, y) => x.localeCompare(y)) };
+      return {
+        clients: [...new Set(s.rows.map((r) => r.client).filter(Boolean))].sort((x, y) => x.localeCompare(y)),
+        noClient: s.rows.some((r) => !r.client),
+      };
     },
 
     /** Grouped list. by = 'ean' (with batch count) | 'batch' (usually inside f.ean). */

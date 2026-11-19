@@ -25,6 +25,8 @@ import { ADMIN_KEYS, ADMIN_PAGE_SIZE } from './keys';
 const ACTION: Record<AuditEntry['action'], string> = {
   'user.create': 'Added user',
   'user.update': 'Edited user',
+  'user.delete': 'Deleted user',
+  'user.password': 'Set temporary password',
   'role.create': 'Created role',
   'role.update': 'Changed permissions',
   'role.delete': 'Deleted role',
@@ -37,6 +39,8 @@ const FIELD: Record<string, string> = {
   role: 'Role',
   active: 'Status',
   stores: 'Stores',
+  clients: 'Clients',
+  password: 'Password',
   permissions: 'Permissions',
   users: 'Users moved to No role',
 };

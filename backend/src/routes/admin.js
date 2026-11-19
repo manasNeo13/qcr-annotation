@@ -3,11 +3,11 @@ import { z } from 'zod';
 import { env } from '../config/env.js';
 import { HttpError } from '../lib/httpError.js';
 import { PERMISSIONS } from '../lib/permissions.js';
-import { parse } from '../lib/validation.js';
+import { newPassword, parse } from '../lib/validation.js';
 import { requireAuth } from '../middleware/auth.js';
 import { requirePerm } from '../middleware/permissions.js';
 
-/** User management: users (shared with main app), role permission matrix, change log. manage_users only. */
+/** User management: users (shared with main app), role permission matrix, change log. manage_users = NHQ only. */
 const router = Router();
 router.use(requireAuth, requirePerm('manage_users'));
 
@@ -20,6 +20,7 @@ const listUsersSchema = z.object({
   ...PAGE,
   q: z.string().trim().max(100).optional().default(''),
   role: z.string().trim().max(100).optional(), // role key; '' = No role; missing = all
+  client: z.string().trim().max(100).optional(), // '' = no client assigned; missing = all
   status: z.enum(['all', 'active', 'inactive']).optional().default('all'),
 });
 
@@ -36,6 +37,7 @@ const userBody = z
     role: z.string().trim().max(100).default(''),
     active: z.boolean().default(true),
     stores: z.array(z.string().trim().min(1).max(50)).max(500).default([]),
+    clients: z.array(z.string().trim().min(1).max(100)).max(50).default([]),
   })
   .strict();
 const createUserBody = userBody.extend({
@@ -45,6 +47,7 @@ const createUserBody = userBody.extend({
     .min(2, 'User ID is required')
     .max(40)
     .regex(/^[A-Za-z0-9_.-]+$/, 'Letters, numbers, _ . - only'),
+  password: newPassword, // temporary; user must change it at first sign-in
 });
 
 const perms = z.array(z.enum(PERMISSIONS)).max(PERMISSIONS.length);
@@ -57,6 +60,7 @@ router.get('/users', async (req, res) => {
   const q = parse(listUsersSchema, req.query);
   res.json({ ...(await admin.listUsers(q)), page: q.page, pageSize: q.pageSize });
 });
+router.get('/users/next-id', async (_req, res) => res.json({ id: await admin.nextUserId() }));
 router.post('/users', async (req, res) => {
   res.status(201).json(await admin.createUser(parse(createUserBody, req.body ?? {}), by(req)));
 });
@@ -64,7 +68,14 @@ router.patch('/users/:key', async (req, res) => {
   res.json(await admin.updateUser(req.params.key, parse(userBody, req.body ?? {}), by(req)));
 });
 
+router.delete('/users/:key', async (req, res) => res.json(await admin.deleteUser(req.params.key, by(req))));
+router.post('/users/:key/password', async (req, res) => {
+  const { password } = parse(z.object({ password: newPassword }).strict(), req.body ?? {});
+  res.json(await admin.setTemporaryPassword(req.params.key, password, by(req)));
+});
+
 router.get('/stores', async (_req, res) => res.json(await admin.storeOptions()));
+router.get('/clients', async (_req, res) => res.json(await admin.clientOptions()));
 
 router.get('/roles', async (_req, res) => res.json({ permissions: PERMISSIONS, roles: await admin.listRoles() }));
 router.post('/roles', async (req, res) => {

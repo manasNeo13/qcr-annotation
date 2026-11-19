@@ -86,6 +86,7 @@ function AnnotationLevel({ ean, batch }: { ean?: string; batch?: string }) {
           searchPlaceholder={
             level === 'ean' ? 'Search EAN, batch no.…' : level === 'batch' ? 'Search batch no.…' : 'Search capture ID…'
           }
+          showScope
         />
         {level === 'docs' ? (
           <DocumentTable

@@ -18,9 +18,16 @@ app.disable('x-powered-by');
 app.set('trust proxy', 1);
 app.use(cors({ exposedHeaders: [RENEW_HEADER] })); // Bearer-token auth, no cookies → any origin OK
 app.use(express.json({ limit: '1mb' }));
+// API = per-user, token-bearing data → never cache. A cached 304 replays an old X-Session-Token
+// header, which the client stores as a "renewed" token → expired session right after login.
+app.set('etag', false);
 
 // Everything lives under BASE_PATH (e.g. /qcr when hosted at neophyte.ril.com/qcr; '' = root).
 const base = express.Router();
+base.use('/api', (req, res, next) => {
+  res.set('Cache-Control', 'no-store');
+  next();
+});
 base.use('/api/health', healthRouter);
 base.use('/api/auth', authRouter);
 base.use('/api/documents', documentsRouter);
@@ -45,10 +52,10 @@ app.use((req, res) => res.status(404).json({ message: 'Not found' }));
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
   const status = err.status || err.statusCode || 500;
-  if (status >= 500) console.error(err);
-  res.status(status).json({
+  if (status >= 500) console.error(err);  res.status(status).json({
     message: status >= 500 ? 'Internal server error' : err.message || 'Request failed',
     ...(err.details && { errors: err.details }),
+    ...(status < 500 && typeof err.code === 'string' && { code: err.code }),
   });
 });
 

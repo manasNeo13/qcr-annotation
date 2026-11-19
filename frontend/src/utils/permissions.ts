@@ -18,6 +18,9 @@ export const PERMISSION_INFO: Record<Permission, { label: string; hint: string }
   manage_users: { label: 'Manage users', hint: 'Users, roles and change log' },
 };
 
+/** Permissions a role may hold. manage_users = NHQ only, never via the role matrix (backend ROLE_PERMISSIONS). */
+export const ROLE_PERMISSIONS: Permission[] = PERMISSIONS.filter((p) => p !== 'manage_users');
+
 /** New roles start with everything except user management (same as backend default). */
 export const DEFAULT_PERMISSIONS: Permission[] = PERMISSIONS.filter((p) => p !== 'manage_users');
 

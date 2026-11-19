@@ -26,18 +26,21 @@ import { adminApi } from '../../api/admin';
 import { useAuth } from '../../auth/AuthContext';
 import { colors } from '../../theme';
 import type { AdminUser } from '../../types';
+import { clientLabel } from '../../utils/clients';
 import { ActiveChip, Pager, RoleChip } from './common';
 import { ADMIN_KEYS, ADMIN_PAGE_SIZE, roleMap } from './keys';
 import UserDrawer from './UserDrawer';
 
 type Status = 'all' | 'active' | 'inactive';
 const ALL = '~all';
+const NONE = '~none';
 
 export default function UsersTab() {
   const { user: me } = useAuth();
   const [search, setSearch] = useState('');
   const [q, setQ] = useState('');
   const [role, setRole] = useState<string>(ALL);
+  const [client, setClient] = useState<string>(ALL);
   const [status, setStatus] = useState<Status>('all');
   const [page, setPage] = useState(1);
   const [editing, setEditing] = useState<AdminUser | 'new' | null>(null);
@@ -50,13 +53,21 @@ export default function UsersTab() {
     return () => clearTimeout(t);
   }, [search]);
 
-  const query = { q, role: role === ALL ? undefined : role, status, page, pageSize: ADMIN_PAGE_SIZE };
+  const query = {
+    q,
+    role: role === ALL ? undefined : role,
+    client: client === ALL ? undefined : client === NONE ? '' : client,
+    status,
+    page,
+    pageSize: ADMIN_PAGE_SIZE,
+  };
   const { data, isLoading, isFetching, isError, error, refetch } = useQuery({
     queryKey: [...ADMIN_KEYS.users, query],
     queryFn: () => adminApi.listUsers(query),
     placeholderData: keepPreviousData,
   });
   const { data: roleData } = useQuery({ queryKey: ADMIN_KEYS.roles, queryFn: adminApi.roles });
+  const { data: clients = [] } = useQuery({ queryKey: ADMIN_KEYS.clients, queryFn: adminApi.clients, staleTime: 5 * 60_000 });
   const roles = roleData?.roles ?? [];
   const byKey = roleMap(roles);
 
@@ -96,6 +107,25 @@ export default function UsersTab() {
               {r.name} ({r.users})
             </MenuItem>
           ))}
+        </TextField>
+        <TextField
+          select
+          size="small"
+          label="Client"
+          value={client}
+          onChange={(e) => {
+            setClient(e.target.value);
+            setPage(1);
+          }}
+          sx={{ width: 160 }}
+        >
+          <MenuItem value={ALL}>All clients</MenuItem>
+          {clients.map((c) => (
+            <MenuItem key={c} value={c}>
+              {clientLabel(c)}
+            </MenuItem>
+          ))}
+          <MenuItem value={NONE}>No client assigned</MenuItem>
         </TextField>
         <ToggleButtonGroup
           size="small"
@@ -141,7 +171,7 @@ export default function UsersTab() {
                   <TableCell>Email</TableCell>
                   <TableCell>Phone</TableCell>
                   <TableCell>Role</TableCell>
-                  <TableCell>Stores</TableCell>
+                  <TableCell>Clients</TableCell>
                   <TableCell>Status</TableCell>
                 </TableRow>
               </TableHead>
@@ -186,19 +216,28 @@ export default function UsersTab() {
                             <RoleChip name={u.roleKey ? (byKey.get(u.roleKey)?.name ?? u.role) : ''} locked={byKey.get(u.roleKey)?.locked} />
                           </TableCell>
                           <TableCell>
-                            {u.stores.length === 0 ? (
+                            {u.roleKey === 'nhq' ? (
+                              <Typography sx={{ color: colors.brandDark, fontSize: 13, fontWeight: 600 }}>All clients</Typography>
+                            ) : u.clients.length === 0 ? (
                               <Typography sx={{ color: colors.subtle, fontSize: 13 }}>None</Typography>
                             ) : (
                               <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap' }}>
-                                {u.stores.slice(0, 2).map((s) => (
-                                  <Chip key={s} size="small" label={s} variant="outlined" />
+                                {u.clients.slice(0, 2).map((c) => (
+                                  <Chip key={c} size="small" label={clientLabel(c)} variant="outlined" />
                                 ))}
-                                {u.stores.length > 2 && <Chip size="small" label={`+${u.stores.length - 2}`} />}
+                                {u.clients.length > 2 && <Chip size="small" label={`+${u.clients.length - 2}`} />}
                               </Box>
                             )}
                           </TableCell>
                           <TableCell>
-                            <ActiveChip active={u.active} />
+                            <Box sx={{ display: 'flex', gap: 0.5, flexWrap: 'wrap', alignItems: 'center' }}>
+                              <ActiveChip active={u.active} />
+                              {!u.hasPassword ? (
+                                <Chip size="small" label="No password" variant="outlined" sx={{ color: colors.muted }} />
+                              ) : u.mustChangePassword ? (
+                                <Chip size="small" label="Temp password" variant="outlined" color="warning" />
+                              ) : null}
+                            </Box>
                           </TableCell>
                         </TableRow>
                       ))}

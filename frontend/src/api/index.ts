@@ -58,6 +58,13 @@ const real = {
       body: JSON.stringify({ email, password }),
     }),
 
+  /** Change own password (also the forced change after a temporary one). Returns a fresh session token. */
+  changePassword: (currentPassword: string, newPassword: string) =>
+    request<{ token: string }>('/auth/password', {
+      method: 'POST',
+      body: JSON.stringify({ currentPassword, newPassword }),
+    }),
+
   listDocuments: (p: ListParams) => request<ListResponse>(`/documents?${pagedQs(p)}`),
 
   /** Edit-stats drill-down. p.changed required. */

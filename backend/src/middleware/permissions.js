@@ -6,7 +6,7 @@ const admin = env.DATA_SOURCE === 'mongo' ? await import('../repos/admin.js') : 
 
 /** Role + permissions of req.user (fresh from DB, 30s cache). Memory demo: everything. */
 export async function accessOf(user) {
-  if (!admin) return { role: user.role || 'NHQ', roleKey: 'nhq', permissions: [...PERMISSIONS] };
+  if (!admin) return { role: user.role || 'NHQ', roleKey: 'nhq', permissions: [...PERMISSIONS], superAdmin: true, clients: [] };
   return admin.permissionsFor(user.id);
 }
 

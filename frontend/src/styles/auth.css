@@ -60,6 +60,9 @@
   color: var(--muted); cursor: pointer; display: grid; place-items: center;
 }
 .nq-pw-toggle:hover { background: var(--brand-soft); color: var(--brand-dark); }
+.nq-link { border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; padding: 6px 12px; border-radius: 6px; }
+.nq-link:hover { background: var(--brand-soft); color: var(--brand-dark); }
+.nq-hint { color: var(--muted); font-size: 12.5px; margin-top: 5px; display: block; }
 
 .nq-btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;

@@ -151,7 +151,12 @@ function filterDocs({ q = '', from, to, ean, batch }: ListFilter) {
 export const mockApi = {
   /** Mock user = admin (all permissions). */
   async getMe(): Promise<Me> {
-    return { id: 'u_mock', name: 'Annotator', email: 'mock@neoqcr.com', role: 'NHQ', roleKey: 'nhq', permissions: [...PERMISSIONS] };
+    return { id: 'u_mock', name: 'Annotator', email: 'mock@neoqcr.com', role: 'NHQ', roleKey: 'nhq', permissions: [...PERMISSIONS], superAdmin: true, clients: [] };
+  },
+
+  async changePassword(): Promise<{ token: string }> {
+    await delay(300);
+    return { token: `mock.pw.${Date.now()}` };
   },
 
   async login(email: string, password: string): Promise<LoginResponse> {

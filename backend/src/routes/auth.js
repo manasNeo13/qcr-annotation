@@ -1,8 +1,8 @@
 import { Router } from 'express';
 import { HttpError } from '../lib/httpError.js';
-import { verifyPassword } from '../lib/password.js';
-import { loginSchema, parse } from '../lib/validation.js';
-import { requireAuth, signToken } from '../middleware/auth.js';
+import { hashPassword, verifyPassword } from '../lib/password.js';
+import { changePasswordSchema, loginSchema, parse } from '../lib/validation.js';
+import { requireAuthAllowPending, signToken } from '../middleware/auth.js';
 import { accessOf } from '../middleware/permissions.js';
 import { repo } from '../repos/index.js';
 
@@ -17,10 +17,25 @@ router.post('/login', async (req, res) => {
   if (!user || !ok) throw new HttpError(401, 'Invalid email or password');
   if (!user.active) throw new HttpError(403, 'Account disabled — contact admin');
   const publicUser = { id: user.id, name: user.name, email: user.email };
-  res.json({ token: signToken({ ...publicUser, role: user.role }), user: publicUser });
+  const mustChangePassword = !!user.mustChangePassword;
+  res.json({ token: signToken({ ...publicUser, role: user.role, mustChangePassword }), user: publicUser, mustChangePassword });
 });
 
-/** Current user + role + permissions (fresh from DB → role edits apply without re-login). */
-router.get('/me', requireAuth, async (req, res) => res.json({ ...req.user, ...(await accessOf(req.user)) }));
+/** Current user + role + permissions + clients (fresh from DB → admin edits apply without re-login). */
+router.get('/me', requireAuthAllowPending, async (req, res) =>
+  res.json({ ...req.user, ...(await accessOf(req.user)), mustChangePassword: req.user.mustChangePassword }),
+);
+
+/** Change own password (also the forced change after a temporary password). Returns a fresh token. */
+router.post('/password', requireAuthAllowPending, async (req, res) => {
+  const { currentPassword, newPassword } = parse(changePasswordSchema, req.body ?? {});
+  const hash = await repo.users.passwordHashOf(req.user.id);
+  if (!hash || !(await verifyPassword(currentPassword, hash))) {
+    throw new HttpError(400, 'Current password is wrong', { currentPassword: 'Current password is wrong' });
+  }
+  await repo.users.setOwnPassword(req.user.id, await hashPassword(newPassword));
+  const user = { id: req.user.id, name: req.user.name, email: req.user.email, role: req.user.role, mustChangePassword: false };
+  res.json({ token: signToken(user) });
+});
 
 export default router;

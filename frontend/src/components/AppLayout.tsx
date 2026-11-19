@@ -2,6 +2,7 @@ import { useState, type ReactNode } from 'react';
 import { Link as RouterLink, Outlet, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import {
+  Alert,
   AppBar,
   Avatar,
   Box,
@@ -15,6 +16,7 @@ import {
   Typography,
 } from '@mui/material';
 import LogoutIcon from '@mui/icons-material/LogoutOutlined';
+import KeyIcon from '@mui/icons-material/KeyOutlined';
 import ListIcon from '@mui/icons-material/TableRowsOutlined';
 import LayersIcon from '@mui/icons-material/LayersOutlined';
 import StatsIcon from '@mui/icons-material/InsertChartOutlined';
@@ -23,6 +25,7 @@ import { useAuth } from '../auth/AuthContext';
 import { useAccess } from '../auth/useAccess';
 import type { Permission } from '../utils/permissions';
 import { brandGrad, colors } from '../theme';
+import { clientLabel } from '../utils/clients';
 
 const NAV: { key: string; label: string; to: string; icon: ReactNode; perm: Permission }[] = [
   { key: 'documents', label: 'Filter Table', to: '/documents', icon: <ListIcon fontSize="small" />, perm: 'view_documents' },
@@ -75,6 +78,10 @@ function NavTabs() {
 
 export default function AppLayout() {
   const { user, logout } = useAuth();
+  const { me } = useAccess();
+  // Non-NHQ users see only their assigned clients.
+  const myClients = me && !me.superAdmin ? me.clients : null;
+  const noClient = !!myClients && myClients.length === 0;
   const navigate = useNavigate();
   const qc = useQueryClient();
   // Manual sign-out: fresh start next login (no return-to-last-page, no cached data).
@@ -159,7 +166,9 @@ export default function AppLayout() {
               <Typography sx={{ fontSize: 14, fontWeight: 600, color: colors.textDark, lineHeight: 1.2 }}>
                 {user?.name}
               </Typography>
-              <Typography sx={{ fontSize: 12, color: colors.muted, lineHeight: 1.2 }}>{user?.email}</Typography>
+              <Typography sx={{ fontSize: 12, color: colors.muted, lineHeight: 1.2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {myClients && myClients.length > 0 ? myClients.map(clientLabel).join(', ') : user?.email}
+              </Typography>
             </Box>
           </ButtonBase>
           <Menu
@@ -173,8 +182,24 @@ export default function AppLayout() {
             <Box sx={{ px: 2, py: 1 }}>
               <Typography sx={{ fontWeight: 600, color: colors.textDark }}>{user?.name}</Typography>
               <Typography sx={{ fontSize: 12, color: colors.muted, wordBreak: 'break-all' }}>{user?.email}</Typography>
+              {myClients && myClients.length > 0 && (
+                <Typography sx={{ fontSize: 12, color: colors.brandDark, fontWeight: 600, mt: 0.5 }}>
+                  {myClients.length > 1 ? 'Clients' : 'Client'}: {myClients.map(clientLabel).join(', ')}
+                </Typography>
+              )}
             </Box>
             <Divider />
+            <MenuItem
+              onClick={() => {
+                setAnchor(null);
+                navigate('/change-password');
+              }}
+            >
+              <ListItemIcon>
+                <KeyIcon fontSize="small" />
+              </ListItemIcon>
+              Change password
+            </MenuItem>
             <MenuItem onClick={signOut}>
               <ListItemIcon>
                 <LogoutIcon fontSize="small" />
@@ -186,7 +211,13 @@ export default function AppLayout() {
       </AppBar>
 
       <Box component="main" sx={{ flex: 1, width: '100%', maxWidth: 1440, mx: 'auto', px: { xs: 1.5, sm: 3, lg: 4 }, py: { xs: 2, sm: 3 } }}>
-        <Outlet />
+        {noClient ? (
+          <Alert severity="info" sx={{ mt: 2 }}>
+            No client is linked to your account yet, so there is nothing to show. Ask your NHQ admin to assign a client.
+          </Alert>
+        ) : (
+          <Outlet />
+        )}
       </Box>
     </Box>
   );

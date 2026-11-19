@@ -7,6 +7,7 @@ export const ADMIN_KEYS = {
   users: ['admin', 'users'] as const,
   roles: ['admin', 'roles'] as const,
   stores: ['admin', 'stores'] as const,
+  clients: ['admin', 'clients'] as const,
   audit: ['admin', 'audit'] as const,
 };
 

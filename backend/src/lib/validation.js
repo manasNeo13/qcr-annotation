@@ -32,6 +32,19 @@ export const loginSchema = z.object({
   password: z.string().min(1, 'Password is required'),
 });
 
+/** New password rule (temporary by admin + own change). Mirrors frontend utils/validation.ts. */
+export const newPassword = z
+  .string()
+  .min(8, 'At least 8 characters')
+  .max(100, 'At most 100 characters')
+  .regex(/[A-Za-z]/, 'Add at least one letter')
+  .regex(/[0-9]/, 'Add at least one number');
+
+export const changePasswordSchema = z
+  .object({ currentPassword: z.string().min(1, 'Enter your current password'), newPassword })
+  .strict()
+  .refine((v) => v.currentPassword !== v.newPassword, { path: ['newPassword'], message: 'New password must be different' });
+
 const day = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD').refine(isDate, 'Invalid date');
 
 /** Optional IST day range. to defaults to from; swapped if reversed. */

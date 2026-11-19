@@ -20,6 +20,9 @@ try {
   /* storage blocked */
 }
 export const UNAUTHORIZED_EVENT = 'qcr:unauthorized';
+/** Backend says: temporary password still in use → open "set new password" screen. */
+export const PASSWORD_CHANGE_EVENT = 'qcr:password-change';
+const PASSWORD_CHANGE_CODE = 'PASSWORD_CHANGE_REQUIRED';
 
 export class ApiError extends Error {
   status: number;
@@ -61,6 +64,7 @@ export async function request<T>(path: string, init: RequestInit = {}): Promise<
     try {
       const body = await res.json();
       message = body.message || body.error || message;
+      if (res.status === 403 && body.code === PASSWORD_CHANGE_CODE) window.dispatchEvent(new Event(PASSWORD_CHANGE_EVENT));
     } catch {
       /* non-JSON error */
     }

@@ -84,6 +84,8 @@ export interface GroupResponse {
 
 export interface FilterOptions {
   clients: string[];
+  /** Captures without a client exist (super admin only). */
+  noClient?: boolean;
 }
 
 /** Scope filters that also narrow calendar dots. */
@@ -112,6 +114,8 @@ export interface User {
 export interface LoginResponse {
   token: string;
   user: User;
+  /** Signed in with a temporary password → must set own before anything else. */
+  mustChangePassword?: boolean;
 }
 
 export interface Neighbors {
@@ -181,6 +185,11 @@ export interface Me extends User {
   role: string;
   roleKey: string;
   permissions: Permission[];
+  /** NHQ: sees every client + manages users. */
+  superAdmin: boolean;
+  /** Assigned clients (others see only these). */
+  clients: string[];
+  mustChangePassword?: boolean;
 }
 
 export interface AdminUser {
@@ -193,7 +202,10 @@ export interface AdminUser {
   roleKey: string;
   active: boolean;
   stores: string[];
+  clients: string[];
   hasPassword: boolean;
+  /** Temporary password not yet replaced by the user. */
+  mustChangePassword: boolean;
   createdAt: string | null;
 }
 
@@ -204,6 +216,7 @@ export interface AdminUserInput {
   role: string;
   active: boolean;
   stores: string[];
+  clients: string[];
 }
 
 export interface StoreOption {
@@ -228,7 +241,7 @@ export interface AuditEntry {
   id: string;
   at: string | null;
   by: { id: string; name: string };
-  action: 'user.create' | 'user.update' | 'role.create' | 'role.update' | 'role.delete';
+  action: 'user.create' | 'user.update' | 'user.delete' | 'user.password' | 'role.create' | 'role.update' | 'role.delete';
   target: { type: 'user' | 'role'; id: string; name: string };
   changes: Record<string, { from: unknown; to: unknown }>;
 }

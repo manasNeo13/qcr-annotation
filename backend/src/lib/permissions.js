@@ -29,3 +29,17 @@ export function roleKey(role) {
 
 export const NO_ROLE_LABEL = 'No role';
 export const isLockedRole = (key) => LOCKED_ROLE_KEYS.includes(key);
+
+/**
+ * Super admin = NHQ only. Sees every client (and captures with no client), only one with manage_users.
+ * Everyone else (admin roles too) sees only the clients assigned to them (users.clients).
+ */
+export const SUPER_ADMIN_KEYS = ['nhq'];
+export const isSuperAdmin = (key) => SUPER_ADMIN_KEYS.includes(key);
+
+/** Permissions a role may hold (manage_users = super admin only, never granted via role matrix). */
+export const ROLE_PERMISSIONS = PERMISSIONS.filter((p) => p !== 'manage_users');
+
+/** Clients assigned to a user doc (users.clients, values = environment.client_name). */
+export const clientsOf = (u) =>
+  [...new Set((Array.isArray(u?.clients) ? u.clients : []).map((c) => String(c ?? '').trim()).filter(Boolean))];

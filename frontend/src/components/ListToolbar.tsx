@@ -18,14 +18,15 @@ import SearchIcon from '@mui/icons-material/Search';
 import ClearIcon from '@mui/icons-material/Close';
 import TuneIcon from '@mui/icons-material/Tune';
 import { api } from '../api';
+import { useAccess } from '../auth/useAccess';
 import type { ListState } from '../hooks/useListState';
 import type { DayScope, StatusFilter } from '../types';
 import { FILTERS } from '../utils/status';
 import { colors } from '../theme';
+import { NO_CLIENT, clientLabel } from '../utils/clients';
 import DateRangeFilter from './DateRangeFilter';
 
 const ALL = '';
-const cap = (s: string) => s.replace(/\b\w/g, (c) => c.toUpperCase());
 const menuProps = { slotProps: { paper: { sx: { maxHeight: 360 } } } };
 const selectSlots = { select: { MenuProps: menuProps, displayEmpty: true }, inputLabel: { shrink: true } };
 
@@ -33,7 +34,7 @@ interface Props {
   state: ListState;
   counts?: Record<StatusFilter, number>;
   searchPlaceholder: string;
-  /** Client dropdown (Filter Table page only). */
+  /** Client dropdown (NHQ only — others are locked to their own clients). */
   showScope?: boolean;
 }
 
@@ -88,11 +89,12 @@ function ScopeFields({ scope, stack }: { scope: ReturnType<typeof useScope>; sta
       slotProps={selectSlots}
     >
       <MenuItem value={ALL}>All clients</MenuItem>
-      {withCurrent(data?.clients ?? [], filter.client).map((c) => (
+      {withCurrent(data?.clients ?? [], filter.client === NO_CLIENT ? undefined : filter.client).map((c) => (
         <MenuItem key={c} value={c}>
-          {cap(c)}
+          {clientLabel(c)}
         </MenuItem>
       ))}
+      {(data?.noClient || filter.client === NO_CLIENT) && <MenuItem value={NO_CLIENT}>No client</MenuItem>}
     </TextField>
   );
 }
@@ -138,7 +140,14 @@ function ScopeButton({ scope }: { scope: ReturnType<typeof useScope> }) {
   );
 }
 
+/** Client filter — NHQ (super admin) only; renders nothing for everyone else. */
 export function ScopeFilters({ state }: { state: ListState }) {
+  const { me } = useAccess();
+  if (!me?.superAdmin) return null;
+  return <ScopeFiltersInner state={state} />;
+}
+
+function ScopeFiltersInner({ state }: { state: ListState }) {
   const scope = useScope(state);
   return (
     <>
@@ -161,6 +170,8 @@ export function ScopeFilters({ state }: { state: ListState }) {
 export default function ListToolbar({ state, counts, searchPlaceholder, showScope = false }: Props) {
   const { filter, latest, search, setSearch, update, setRange } = state;
   const status = filter.status ?? 'all';
+  const { me } = useAccess();
+  const scopeOn = showScope && !!me?.superAdmin;
 
   return (
     <Box
@@ -180,7 +191,7 @@ export default function ListToolbar({ state, counts, searchPlaceholder, showScop
           placeholder={searchPlaceholder}
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          sx={{ flex: 1, minWidth: 120, maxWidth: showScope ? undefined : { lg: 460 } }}
+          sx={{ flex: 1, minWidth: 120, maxWidth: scopeOn ? undefined : { lg: 460 } }}
           slotProps={{
             htmlInput: { 'aria-label': 'Search' },
             input: {
@@ -199,7 +210,7 @@ export default function ListToolbar({ state, counts, searchPlaceholder, showScop
             },
           }}
         />
-        {showScope && <ScopeFilters state={state} />}
+        {scopeOn && <ScopeFilters state={state} />}
       </Box>
       <Box
         className="scrollbar-hide"

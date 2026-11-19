@@ -39,3 +39,22 @@ export const loginSchema = z.object({
 });
 
 export type LoginFormValues = z.infer<typeof loginSchema>;
+
+/** New password rule. Mirrors backend lib/validation.js `newPassword`. */
+export const newPasswordSchema = z
+  .string()
+  .min(8, 'At least 8 characters')
+  .max(100, 'At most 100 characters')
+  .regex(/[A-Za-z]/, 'Add at least one letter')
+  .regex(/[0-9]/, 'Add at least one number');
+
+export const changePasswordSchema = z
+  .object({
+    currentPassword: z.string().min(1, 'Enter your current password'),
+    newPassword: newPasswordSchema,
+    confirm: z.string().min(1, 'Type the new password again'),
+  })
+  .refine((v) => v.newPassword === v.confirm, { path: ['confirm'], message: "Passwords don't match" })
+  .refine((v) => v.currentPassword !== v.newPassword, { path: ['newPassword'], message: 'New password must be different' });
+
+export type ChangePasswordValues = z.infer<typeof changePasswordSchema>;

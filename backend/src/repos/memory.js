@@ -67,7 +67,14 @@ export const memoryRepo = {
   users: {
     async findForLogin(email) {
       const u = users.find((x) => x.email.toLowerCase() === email.toLowerCase());
-      return u ? { ...u, role: 'NHQ', active: true } : null;
+      return u ? { ...u, role: 'NHQ', active: true, mustChangePassword: false } : null;
+    },
+    async passwordHashOf(userId) {
+      return users.find((x) => x.id === userId)?.passwordHash ?? null;
+    },
+    async setOwnPassword(userId, hash) {
+      const u = users.find((x) => x.id === userId);
+      if (u) u.passwordHash = hash;
     },
   },
 
