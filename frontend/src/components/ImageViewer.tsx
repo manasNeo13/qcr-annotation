@@ -5,8 +5,11 @@ import ZoomInIcon from '@mui/icons-material/ZoomIn';
 import ZoomOutIcon from '@mui/icons-material/ZoomOut';
 import FullscreenIcon from '@mui/icons-material/Fullscreen';
 import CloseIcon from '@mui/icons-material/Close';
+import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import BrokenImageIcon from '@mui/icons-material/BrokenImageOutlined';
 import { colors } from '../theme';
+import type { ScanImage } from '../types';
 
 const STEPS = [1, 1.5, 2, 3];
 
@@ -188,13 +191,198 @@ function PanFrame({ zoom, pan, sx, children }: { zoom: number; pan: boolean; sx:
   );
 }
 
-export default function ImageViewer({ src, alt }: { src: string; alt: string }) {
+const FIELD_LABEL: Record<string, string> = { mrp: 'MRP', batch: 'Batch', mfd: 'Mfg date', exp: 'Expiry' };
+const FIELD_ORDER = ['mfd', 'exp', 'batch', 'mrp'];
+const sortFields = (f: string[]) => [...f].sort((a, b) => FIELD_ORDER.indexOf(a) - FIELD_ORDER.indexOf(b));
+
+/** Small flags: which fields were read from this photo. */
+function FieldTags({ fields, dark }: { fields: string[]; dark?: boolean }) {
+  if (!fields.length) return null;
+  return (
+    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+      {sortFields(fields).map((f) => (
+        <Box
+          key={f}
+          component="span"
+          sx={{
+            fontSize: 11.5,
+            fontWeight: 700,
+            lineHeight: 1,
+            px: 0.75,
+            py: 0.5,
+            borderRadius: '6px',
+            whiteSpace: 'nowrap',
+            bgcolor: dark ? 'rgba(255,255,255,.14)' : colors.brandSoft,
+            color: dark ? '#fff' : colors.brandDark,
+            border: `1px solid ${dark ? 'rgba(255,255,255,.25)' : colors.brand100}`,
+          }}
+        >
+          {FIELD_LABEL[f] ?? f.toUpperCase()}
+        </Box>
+      ))}
+    </Box>
+  );
+}
+
+const arrowSx = {
+  position: 'absolute',
+  top: '50%',
+  transform: 'translateY(-50%)',
+  zIndex: 2,
+  width: 40,
+  height: 40,
+  bgcolor: 'rgba(18,23,30,.62)',
+  color: '#fff',
+  '&:hover': { bgcolor: 'rgba(18,23,30,.82)' },
+  '&.Mui-disabled': { opacity: 0, pointerEvents: 'none' },
+} as const;
+
+/** On-image photo navigation: ‹ › arrows + "Shows: …" flag + dots. Sits over the frame, so nothing to scroll to. */
+function PhotoOverlay({ images, index, onPick }: { images: ScanImage[]; index: number; onPick: (i: number) => void }) {
+  const photo = images[index];
+  const many = images.length > 1;
+  return (
+    <>
+      {photo && (photo.fields.length > 0 || many) && (
+        <Box
+          sx={{
+            position: 'absolute',
+            top: 10,
+            left: 10,
+            zIndex: 2,
+            pointerEvents: 'none',
+            display: 'flex',
+            alignItems: 'center',
+            flexWrap: 'wrap',
+            gap: 0.75,
+            maxWidth: 'calc(100% - 20px)',
+            px: 1,
+            py: 0.75,
+            borderRadius: '8px',
+            bgcolor: 'rgba(18,23,30,.72)',
+            backdropFilter: 'blur(4px)',
+          }}
+        >
+          {many && (
+            <Typography sx={{ fontSize: 12, fontWeight: 700, color: '#fff' }}>
+              Photo {index + 1}/{images.length}
+            </Typography>
+          )}
+          {photo.fields.length > 0 && (
+            <>
+              <Typography sx={{ fontSize: 11.5, fontWeight: 600, color: 'rgba(255,255,255,.8)' }}>
+                {many ? '· Shows' : 'Shows'}
+              </Typography>
+              <FieldTags fields={photo.fields} dark />
+            </>
+          )}
+        </Box>
+      )}
+      {many && (
+        <>
+          <IconButton aria-label="Previous photo" disabled={index === 0} onClick={() => onPick(index - 1)} sx={{ ...arrowSx, left: 10 }}>
+            <ChevronLeftIcon />
+          </IconButton>
+          <IconButton
+            aria-label="Next photo"
+            disabled={index === images.length - 1}
+            onClick={() => onPick(index + 1)}
+            sx={{ ...arrowSx, right: 10 }}
+          >
+            <ChevronRightIcon />
+          </IconButton>
+          <Box
+            sx={{
+              position: 'absolute',
+              bottom: 10,
+              left: '50%',
+              transform: 'translateX(-50%)',
+              zIndex: 2,
+              display: 'flex',
+              gap: 0.75,
+              px: 1,
+              py: 0.75,
+              borderRadius: 99,
+              bgcolor: 'rgba(18,23,30,.62)',
+            }}
+          >
+            {images.map((img, i) => (
+              <Box
+                key={img.url + i}
+                component="button"
+                type="button"
+                aria-label={`Photo ${i + 1}`}
+                aria-current={i === index}
+                onClick={() => onPick(i)}
+                sx={{
+                  width: i === index ? 18 : 8,
+                  height: 8,
+                  p: 0,
+                  border: 0,
+                  borderRadius: 99,
+                  cursor: 'pointer',
+                  bgcolor: i === index ? '#fff' : 'rgba(255,255,255,.45)',
+                  transition: 'width .15s, background-color .15s',
+                }}
+              />
+            ))}
+          </Box>
+        </>
+      )}
+    </>
+  );
+}
+
+/**
+ * Old captures: one `src`. New scans: `images` (best photos + fields read from each);
+ * several → tabs to switch, the fields shown on each photo are flagged on it.
+ */
+export default function ImageViewer({ src, alt, images }: { src: string; alt: string; images?: ScanImage[] }) {
   const [zoom, setZoom] = useState(1);
   const [full, setFull] = useState(false);
   const [fullZoom, setFullZoom] = useState(1);
   const [pan, setPan] = useState(false);
   const [fullPan, setFullPan] = useState(false);
   const [broken, setBroken] = useState(false);
+  const [index, setIndex] = useState(0);
+
+  const scan = images !== undefined;
+  const photo = scan ? images[index] : undefined;
+  const current = scan ? (photo?.url ?? '') : src;
+  const missing = scan && !images.length;
+  const pick = (i: number) => {
+    setIndex(i);
+    setBroken(false);
+    setZoom(1);
+    setPan(false);
+  };
+
+  if (missing) {
+    return (
+      <Paper sx={{ overflow: 'hidden' }}>
+        <Box sx={{ px: 2, py: 1.25, borderBottom: `1px solid ${colors.border}` }}>
+          <Typography variant="h5" component="h2">
+            Document image
+          </Typography>
+        </Box>
+        <Box
+          sx={{
+            bgcolor: colors.background,
+            height: { xs: '30vh', md: 320 },
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: colors.muted,
+            gap: 1,
+          }}
+        >
+          <BrokenImageIcon sx={{ fontSize: 48, color: colors.subtle }} />
+          <Typography>No image for this scan.</Typography>
+        </Box>
+      </Paper>
+    );
+  }
 
   return (
     <Paper sx={{ overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
@@ -222,6 +410,8 @@ export default function ImageViewer({ src, alt }: { src: string; alt: string }) 
           </>
         )}
       </Box>
+      <Box sx={{ position: 'relative' }}>
+      {scan && <PhotoOverlay images={images} index={index} onPick={pick} />}
       <PanFrame
         zoom={zoom}
         pan={pan}
@@ -245,9 +435,10 @@ export default function ImageViewer({ src, alt }: { src: string; alt: string }) 
             <Typography>Image unavailable. The link may have expired — reload the page.</Typography>
           </Box>
         ) : (
-          <Img src={src} alt={alt} zoom={zoom} onError={() => setBroken(true)} />
+          <Img key={current} src={current} alt={alt} zoom={zoom} onError={() => setBroken(true)} />
         )}
       </PanFrame>
+      </Box>
 
       <Dialog fullScreen open={full} onClose={() => setFull(false)}>
         <Box
@@ -268,6 +459,18 @@ export default function ImageViewer({ src, alt }: { src: string; alt: string }) 
             <CloseIcon />
           </IconButton>
         </Box>
+        <Box sx={{ position: 'relative' }}>
+        {scan && (
+          <PhotoOverlay
+            images={images}
+            index={index}
+            onPick={(i) => {
+              pick(i);
+              setFullZoom(1);
+              setFullPan(false);
+            }}
+          />
+        )}
         <PanFrame
           zoom={fullZoom}
           pan={fullPan}
@@ -281,8 +484,9 @@ export default function ImageViewer({ src, alt }: { src: string; alt: string }) 
             p: 2,
           }}
         >
-          <Img src={src} alt={alt} zoom={fullZoom} onError={() => setBroken(true)} />
+          <Img key={current} src={current} alt={alt} zoom={fullZoom} onError={() => setBroken(true)} />
         </PanFrame>
+        </Box>
       </Dialog>
     </Paper>
   );

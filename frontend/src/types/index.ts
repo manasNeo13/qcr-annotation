@@ -34,6 +34,15 @@ export interface DocumentItem {
   history: HistoryEntry[];
   /** Only on /documents/edited rows. */
   edit?: EditInfo;
+  /** New scans only: best photos, each with the fields read from it (mrp | batch | mfd | exp). Empty = no photo. */
+  images?: ScanImage[];
+  /** New scan with no saved result yet → no values, not editable. */
+  noResult?: boolean;
+}
+
+export interface ScanImage {
+  url: string;
+  fields: string[];
 }
 
 /** Edit drill-down row info: original OCR values, fields changed (original ≠ final), who saved. */

@@ -122,14 +122,22 @@ export async function storeOptions() {
 }
 
 // ── Clients (for user assignment) ────────────────────────────────────────
-/** Client names from captures (environment.client_name), as stored. Cached 5 min. */
+/** Client names from captures (environment.client_name + new scans' metadata.client), as stored. Cached 5 min. */
 let clientsCache = null;
 export async function clientOptions() {
   if (clientsCache && Date.now() - clientsCache.at < 5 * 60_000) return clientsCache.list;
-  const raw = await col('environment').distinct('client_name');
-  const list = [...new Set(raw.filter((c) => typeof c === 'string').map((c) => c.trim()).filter(Boolean))].sort((a, b) =>
-    a.localeCompare(b),
-  );
+  const [env, scans] = await Promise.all([
+    col('environment').distinct('client_name'),
+    col('metadata').distinct('client', { started_at: { $exists: true } }),
+  ]);
+  // Same client in both (any case) → one entry, environment spelling first.
+  const byKey = new Map();
+  for (const c of [...env, ...scans]) {
+    if (typeof c !== 'string' || !c.trim()) continue;
+    const k = c.trim().toLowerCase();
+    if (!byKey.has(k)) byKey.set(k, c.trim());
+  }
+  const list = [...byKey.values()].sort((a, b) => a.localeCompare(b));
   clientsCache = { at: Date.now(), list };
   return list;
 }

@@ -20,7 +20,12 @@ router.use(requireAuth);
 const canView = requirePerm(...VIEW_PERMISSIONS);
 
 /** Repo DTO → API DocumentItem (frontend/src/types). id = env_id in mongo mode. */
-const present = ({ imageRef, ...d }) => ({ ...d, imageUrl: signBlobUrl(imageRef) });
+const present = ({ imageRef, images, ...d }) => ({
+  ...d,
+  imageUrl: signBlobUrl(imageRef),
+  // New scans: every best photo (signed) + the fields read from it.
+  ...(images ? { images: images.map((i) => ({ url: signBlobUrl(i.url), fields: i.fields })) } : {}),
+});
 
 router.get('/', requirePerm('view_documents'), async (req, res) => {
   const query = parse(listQuerySchema, req.query);

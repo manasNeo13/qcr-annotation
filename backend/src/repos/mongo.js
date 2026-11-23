@@ -2,6 +2,9 @@
  * MongoDB repo over the main QCR app collections.
  *   environment — one doc per capture (env_id, store_id, …)
  *   metadata    — OCR reads, several per capture; row values = first non-null by newest timestamp
+ *                 NEW scans (engine v3, have `started_at`): one doc per scan session, own `client`, `best_images`;
+ *                 recaptures reuse env_id → row = newest scan only. Values come from session_results.
+ *   session_results — per scan (metadata_id → metadata._id): predicted + edited_values (SDK + dashboard edits)
  *   users       — login (scrypt); access by assigned clients (users.clients), NHQ sees all
  *   store       — store ids (field `id`)
  * Edits write to the NEWEST metadata doc of a capture; previous values pushed to annotation_history.
@@ -29,7 +32,29 @@ const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 // ── Access ────────────────────────────────────────────────────────────────
 const accessCache = new Map(); // userId → { at, rows, envIds }
 /** Drop cached store scope (user's stores/role/status changed). No id = everyone. */
-export const clearAccessCache = (userId) => (userId ? accessCache.delete(userId) : accessCache.clear());
+export const clearAccessCache = (userId) => {
+  if (userId) return accessCache.delete(userId);
+  accessCache.clear();
+  scanCache = null;
+};
+
+/** New-schema scans (have started_at): env_id → client (metadata.client). Shared by all users, cached 1 min. */
+let scanCache = null; // { at, rows: Promise<{ env, client }[]> }
+function scanEnvs() {
+  if (scanCache && Date.now() - scanCache.at < ACCESS_TTL_MS) return scanCache.rows;
+  const rows = col('metadata')
+    .find({ started_at: { $exists: true } }, { projection: { _id: 0, env_id: 1, client: 1 } })
+    .sort({ _id: 1 })
+    .toArray()
+    .then((docs) => {
+      const m = new Map(); // newest scan wins (sorted by insert)
+      for (const d of docs) if (d.env_id) m.set(d.env_id, clientKey(d.client));
+      return [...m].map(([env, client]) => ({ env, client }));
+    });
+  scanCache = { at: Date.now(), rows };
+  rows.catch(() => (scanCache = null));
+  return rows;
+}
 
 /** Client key of a capture: environment.client_name trimmed + lowercased; '' = no client. */
 const clientKey = (v) => String(v ?? '').trim().toLowerCase();
@@ -47,17 +72,20 @@ async function scope(userId, fresh = false) {
   if (!user || user.status === false) throw new HttpError(401, 'Account not active');
   const superAdmin = isSuperAdmin(roleKey(user.role));
   const mine = clientsOf(user).map(clientKey);
-  const raw =
+  const [raw, scans] =
     superAdmin || mine.length
-      ? await col('environment')
-          .find(superAdmin ? {} : { client_name: { $type: 'string' } }, { projection: { _id: 0, env_id: 1, client_name: 1 } })
-          .toArray()
-      : [];
+      ? await Promise.all([
+          col('environment')
+            .find(superAdmin ? {} : { client_name: { $type: 'string' } }, { projection: { _id: 0, env_id: 1, client_name: 1 } })
+            .toArray(),
+          scanEnvs(),
+        ])
+      : [[], []];
   const allowed = new Set(mine);
-  const rows = raw
-    .filter((r) => r.env_id)
-    .map((r) => ({ env: r.env_id, client: clientKey(r.client_name) }))
-    .filter((r) => superAdmin || allowed.has(r.client));
+  // Old captures: client from environment. New scans: client from their own metadata doc.
+  const rows = [...raw.filter((r) => r.env_id).map((r) => ({ env: r.env_id, client: clientKey(r.client_name) })), ...scans].filter(
+    (r) => superAdmin || allowed.has(r.client),
+  );
   const s = { at: Date.now(), rows, envIds: rows.map((r) => r.env), clientKeys: superAdmin ? null : allowed, superAdmin };
   accessCache.set(userId, s);
   return s;
@@ -85,7 +113,45 @@ const firstNonNull = (arr) => ({ $arrayElemAt: [{ $filter: { input: arr, cond: {
 const toDate = (x) => ({ $convert: { input: x, to: 'date', onError: null, onNull: null } });
 
 /** metadata docs → one row per env_id, with status. */
-const RAW_FIELDS = ['env_id', 'timestamp', 'img_url', 'mrp', 'mfg_date', 'expiry_date', 'batch_no', 'ean', 'edited_by', 'edited_at', 'annotation_version', 'annotation_history'];
+const RAW_FIELDS = ['env_id', 'timestamp', 'started_at', 'img_url', 'best_images', 'mrp', 'mfg_date', 'expiry_date', 'batch_no', 'ean', 'edited_by', 'edited_at', 'annotation_version', 'annotation_history'];
+
+// ── New scans: text values from session_results ("01-07-2026", "01/11/2024", "N/A") ──
+/** "", "N/A", "NA", "null", "none" → null. */
+const textOrNull = (x) => ({
+  $cond: [{ $in: [{ $toUpper: { $trim: { input: { $ifNull: [{ $toString: x }, ''] } } } }, ['', 'N/A', 'NA', 'NULL', 'NONE']] }, null, x],
+});
+/**
+ * "DD-MM-YYYY" / "DD/MM/YYYY" / "DD.MM.YYYY" → Date (UTC midnight); anything else → null.
+ * Rebuilt as ISO "YYYY-MM-DD" + $convert: Cosmos $dateFromString gives random/mixed results when used
+ * several times in one stage (values swapped between fields run to run).
+ */
+const dmyDate = (x) => ({
+  $let: {
+    vars: {
+      s: {
+        $ifNull: [
+          { $replaceAll: { input: { $replaceAll: { input: { $toString: x }, find: '/', replacement: '-' } }, find: '.', replacement: '-' } },
+          '',
+        ],
+      },
+    },
+    in: {
+      $cond: [
+        { $regexMatch: { input: '$$s', regex: '^\\d{2}-\\d{2}-\\d{4}$' } },
+        {
+          $convert: {
+            input: { $concat: [{ $substrCP: ['$$s', 6, 4] }, '-', { $substrCP: ['$$s', 3, 2] }, '-', { $substrCP: ['$$s', 0, 2] }] },
+            to: 'date',
+            onError: null,
+            onNull: null,
+          },
+        },
+        null,
+      ],
+    },
+  },
+});
+const IS_SCAN = { $ne: [{ $ifNull: ['$scanId', null] }, null] };
 
 /** Editor name for edits made outside this dashboard (root ≠ predicted, no edited_by). */
 export const STORE_USER = SDK_EDITOR;
@@ -110,6 +176,11 @@ function rowStages(envIds, { from, to } = {}) {
         _id: '$env_id',
         ts: { $first: '$timestamp' },
         img: { $first: '$img_url' },
+        // New scans (no timestamp): latest recapture by started_at via $max — NOT the sort
+        // (Cosmos ignores the 2nd sort key on ties → $first picked a random recapture).
+        latestScan: {
+          $max: { $cond: [{ $ifNull: ['$started_at', false] }, { t: '$started_at', id: '$_id', imgs: '$best_images' }, null] },
+        },
         editedBy: { $first: '$edited_by' },
         editedAt: { $first: '$edited_at' },
         version: { $first: '$annotation_version' },
@@ -125,23 +196,39 @@ function rowStages(envIds, { from, to } = {}) {
         pBatches: { $push: '$pred.batch_no' },
       },
     },
+    {
+      $addFields: {
+        ts: { $ifNull: ['$ts', '$latestScan.t'] },
+        scanId: { $ifNull: ['$latestScan.id', null] },
+        images: '$latestScan.imgs',
+      },
+    },
     ...(envIds ? [{ $match: { _id: { $in: envIds } } }] : []),
     // Date filter on capture time (latest read), IST days.
     ...(from ? [{ $match: { ts: { $gte: istWindow(from, to).start, $lte: istWindow(from, to).end } } }] : []),
+    // New scans → their session_results doc (indexed metadata_id). Old rows have scanId null → no match.
+    { $lookup: { from: 'session_results', localField: 'scanId', foreignField: 'metadata_id', as: 'sr' } },
+    { $addFields: { sr: { $arrayElemAt: ['$sr', 0] } } },
+    // Current = predicted with edited_values on top (latest edit wins).
+    { $addFields: { cur: { $mergeObjects: [{ $ifNull: ['$sr.predicted', {}] }, { $ifNull: ['$sr.edited_values', {}] }] } } },
     {
       $project: {
-        ts: 1, img: 1, editedBy: 1, editedAt: 1, version: 1, history: 1,
-        mrp: firstNonNull('$mrps'),
-        mfg: toDate(firstNonNull('$mfgs')),
-        exp: toDate(firstNonNull('$exps')),
-        batch: firstNonNull('$batches'),
+        ts: 1, img: 1, version: 1, history: 1, images: 1,
+        scan: IS_SCAN,
+        noResult: { $and: [IS_SCAN, { $eq: [{ $type: '$sr' }, 'missing'] }] },
+        // Scans: edited_by = dashboard user id (SDK edits leave it unset); time = updated_at once edited.
+        editedBy: { $cond: [IS_SCAN, '$sr.edited_by', '$editedBy'] },
+        editedAt: { $cond: [IS_SCAN, { $cond: [{ $eq: ['$sr.edited', true] }, '$sr.updated_at', null] }, '$editedAt'] },
+        mrp: { $cond: [IS_SCAN, textOrNull('$cur.mrp'), firstNonNull('$mrps')] },
+        mfg: { $cond: [IS_SCAN, dmyDate(textOrNull('$cur.mfd')), toDate(firstNonNull('$mfgs'))] },
+        exp: { $cond: [IS_SCAN, dmyDate(textOrNull('$cur.exp')), toDate(firstNonNull('$exps'))] },
+        batch: { $cond: [IS_SCAN, textOrNull('$cur.batch'), firstNonNull('$batches')] },
         ean: firstNonNull('$eans'),
-        pred: {
-          mrp: firstNonNull('$pMrps'),
-          mfg: toDate(firstNonNull('$pMfgs')),
-          exp: toDate(firstNonNull('$pExps')),
-          batch: firstNonNull('$pBatches'),
-        },
+        // Original values, flat (Cosmos returns null for $dateFromString inside a nested object) → r.pred in toDto.
+        pMrp: { $cond: [IS_SCAN, textOrNull('$sr.predicted.mrp'), firstNonNull('$pMrps')] },
+        pMfg: { $cond: [IS_SCAN, dmyDate(textOrNull('$sr.predicted.mfd')), toDate(firstNonNull('$pMfgs'))] },
+        pExp: { $cond: [IS_SCAN, dmyDate(textOrNull('$sr.predicted.exp')), toDate(firstNonNull('$pExps'))] },
+        pBatch: { $cond: [IS_SCAN, textOrNull('$sr.predicted.batch'), firstNonNull('$pBatches')] },
       },
     },
     {
@@ -214,8 +301,7 @@ const metaOf = (v = {}) => ({
  * attribute that change to STORE_USER. Edits after a dashboard save stay undetectable.
  */
 function withOutsideEdit(dto, r) {
-  if (!r.pred) return dto;
-  const predicted = metaOf(r.pred);
+  const predicted = metaOf({ mrp: r.pMrp, mfg: r.pMfg, exp: r.pExp, batch: r.pBatch });
   const h = dto.history;
   const first = h[0]?.metadata ?? dto.metadata;
   if (!diffFields(predicted, first).length) return dto;
@@ -227,28 +313,56 @@ function withOutsideEdit(dto, r) {
   return { ...dto, history: [v0], updatedBy: dto.updatedBy ?? STORE_USER };
 }
 
-function toDto(r) {
+/** Scan best_images → [{ url, fields }] (fields = mrp | batch | mfd | exp shown on that photo). */
+const imagesOf = (list) =>
+  (Array.isArray(list) ? list : [])
+    .filter((i) => i && typeof i.url === 'string' && i.url)
+    .map((i) => ({ url: i.url, fields: Array.isArray(i.fields) ? i.fields.map(String) : [] }));
+
+/** users.id → display name (scan edited_by holds the user id). Cached 1 min. */
+let namesCache = null;
+async function userNames() {
+  if (namesCache && Date.now() - namesCache.at < ACCESS_TTL_MS) return namesCache.map;
+  const docs = await col('users').find({ id: { $exists: true } }, { projection: { _id: 0, id: 1, name: 1, email: 1 } }).toArray();
+  const map = new Map(docs.map((u) => [String(u.id), String(u.name || u.email || u.id)]));
+  namesCache = { at: Date.now(), map };
+  return map;
+}
+
+function toDto(r, names) {
   const ts = iso(r.ts)?.toISOString() ?? new Date(0).toISOString();
   const ean = r.ean != null ? String(r.ean) : '';
+  const images = r.scan ? imagesOf(r.images) : null;
+  const editedBy = r.scan && r.editedBy != null ? (names?.get(String(r.editedBy)) ?? String(r.editedBy)) : r.editedBy;
+  const edited = !!(r.scan && iso(r.editedAt));
+  const ref = images ? images[0]?.url : r.img;
   return withOutsideEdit({
     id: r._id,
     productName: ean ? `EAN ${ean}` : 'No EAN',
     ean,
-    fileName: fileOf(r.img),
-    imageRef: r.img || '',
+    fileName: fileOf(ref),
+    imageRef: ref || '',
     metadata: metaOf(r),
     status: r.status,
-    version: Number(r.version) || 1,
+    version: r.scan ? (edited ? 2 : 1) : Number(r.version) || 1,
     createdAt: ts,
     updatedAt: iso(r.editedAt)?.toISOString() ?? ts,
-    updatedBy: r.editedBy ?? undefined,
+    updatedBy: editedBy ?? undefined,
     history: Array.isArray(r.history) ? r.history : [],
+    // New scans only: every best photo + fields it shows; noResult = no session_results yet (not editable).
+    ...(images ? { images, noResult: !!r.noResult } : {}),
   }, r);
+}
+
+/** Rows → DTOs (resolves scan editor ids to names only when needed). */
+async function toDtos(rows) {
+  const names = rows.some((r) => r.scan && r.editedBy != null) ? await userNames() : null;
+  return rows.map((r) => toDto(r, names));
 }
 
 async function getRow(envId) {
   const [row] = await col('metadata').aggregate([{ $match: { env_id: envId } }, ...rowStages()]).toArray();
-  return row ? toDto(row) : null;
+  return row ? (await toDtos([row]))[0] : null;
 }
 
 /** Edited captures only (dashboard history or outside edit) in scope + capture range + search → DTOs. */
@@ -258,18 +372,64 @@ async function editedRows({ from, to, client, q }, user) {
   const rows = await col('metadata')
     .aggregate([...rowStages(envIds, { from, to }), ...searchStage(q)], { allowDiskUse: true })
     .toArray();
-  return rows.map(toDto).filter((d) => d.history.length);
+  return (await toDtos(rows)).filter((d) => d.history.length);
 }
 
 /** metadata doc → live event fields. */
 const liveDoc = (d) => ({
   id: String(d._id),
   env: d.env_id ?? null,
-  ts: (iso(d.timestamp) ?? (d._id instanceof ObjectId ? d._id.getTimestamp() : new Date())).toISOString(),
+  ts: (iso(d.timestamp) ?? iso(d.started_at) ?? (d._id instanceof ObjectId ? d._id.getTimestamp() : new Date())).toISOString(),
   ean: d.ean != null ? String(d.ean) : '',
   batch: d.batch_no != null ? String(d.batch_no) : '',
-  hasImage: !!d.img_url,
+  // New scans are complete when written (may have no photo) → announce right away.
+  hasImage: !!d.img_url || !!d.started_at,
 });
+const LIVE_PROJECTION = { env_id: 1, timestamp: 1, started_at: 1, img_url: 1, ean: 1, batch_no: 1 };
+
+// ── New-scan edits (session_results) ─────────────────────────────────────
+const SCAN_KEY = { batch: 'batch', mrp: 'mrp', mfd: 'mfd', expiry: 'exp' };
+const DMY_SEP = /\d([-/.])\d/;
+
+/** ISO "2026-07-01" → "01-07-2026" (separator copied from the scan's own dates). */
+const dmyText = (isoDay, sep) => isoDay.split('-').reverse().join(sep);
+
+/** MRP number → text with at least as many decimals as the scan's own value ("105.0", "625.00"). */
+const mrpText = (n, sample) => {
+  const want = String(sample ?? '').match(/\.(\d+)$/)?.[1].length ?? 2;
+  const need = String(n).split('.')[1]?.length ?? 0;
+  return n.toFixed(Math.max(want, need));
+};
+
+/**
+ * Dashboard edit of a new scan → session_results only (metadata untouched).
+ * Fields changed vs what is shown now go into edited_values in the scan's own text style;
+ * other edited_values (e.g. SDK edits) stay. edited = true, edited_by = user id, updated_at = now.
+ */
+async function updateScan(id, latest, cur, metadata, user) {
+  const sr = await col('session_results').findOne({ metadata_id: latest._id });
+  if (!sr) throw new HttpError(409, "No result saved for this scan yet — it can't be edited");
+  const pred = sr.predicted ?? {};
+  const shown = { ...pred, ...(sr.edited_values ?? {}) };
+  const sample = [pred.mfd, pred.exp, shown.mfd, shown.exp].map((v) => String(v ?? '')).find((v) => DMY_SEP.test(v)) ?? '';
+  const sep = sample.match(DMY_SEP)?.[1] ?? '-';
+  const text = {
+    batch: metadata.batchNumber,
+    mrp: mrpText(metadata.mrp, pred.mrp ?? shown.mrp),
+    mfd: dmyText(metadata.mfgDate, sep),
+    exp: dmyText(metadata.expiryDate, sep),
+  };
+  const changed = diffFields(cur.metadata, metadata);
+  if (!changed.length) return cur;
+  const editedValues = { ...(sr.edited_values ?? {}) };
+  for (const k of changed) editedValues[SCAN_KEY[k]] = text[SCAN_KEY[k]];
+  const res = await col('session_results').updateOne(
+    { _id: sr._id, updated_at: sr.updated_at ?? null }, // optimistic lock
+    { $set: { edited_values: editedValues, edited: true, edited_by: user.id, updated_at: new Date() } },
+  );
+  if (!res.matchedCount) throw new HttpError(409, 'Capture changed meanwhile — reload and retry');
+  return getRow(id);
+}
 
 // ── Repo ─────────────────────────────────────────────────────────────────
 export const mongoRepo = {
@@ -298,7 +458,7 @@ export const mongoRepo = {
       const docs = await col('metadata')
         .find(
           { _id: { $gte: ObjectId.createFromTime(Math.floor(sinceMs / 1000)) } },
-          { projection: { env_id: 1, timestamp: 1, img_url: 1, ean: 1, batch_no: 1 } },
+          { projection: LIVE_PROJECTION },
         )
         .sort({ _id: 1 })
         .limit(limit)
@@ -310,7 +470,7 @@ export const mongoRepo = {
     async byIds(ids) {
       if (!ids.length) return [];
       const docs = await col('metadata')
-        .find({ _id: { $in: ids.map((i) => new ObjectId(i)) } }, { projection: { env_id: 1, timestamp: 1, img_url: 1, ean: 1, batch_no: 1 } })
+        .find({ _id: { $in: ids.map((i) => new ObjectId(i)) } }, { projection: LIVE_PROJECTION })
         .toArray();
       return docs.map(liveDoc);
     },
@@ -319,10 +479,15 @@ export const mongoRepo = {
     async storesOf(envIds) {
       const map = new Map();
       if (!envIds.length) return map;
-      const rows = await col('environment')
-        .find({ env_id: { $in: envIds } }, { projection: { _id: 0, env_id: 1, client_name: 1 } })
-        .toArray();
+      const [rows, scans] = await Promise.all([
+        col('environment').find({ env_id: { $in: envIds } }, { projection: { _id: 0, env_id: 1, client_name: 1 } }).toArray(),
+        // New scans carry their own client.
+        col('metadata')
+          .find({ env_id: { $in: envIds }, started_at: { $exists: true } }, { projection: { _id: 0, env_id: 1, client: 1 } })
+          .toArray(),
+      ]);
       for (const r of rows) map.set(r.env_id, [`client:${clientKey(r.client_name)}`]);
+      for (const r of scans) if (!map.has(r.env_id)) map.set(r.env_id, [`client:${clientKey(r.client)}`]);
       return map;
     },
 
@@ -331,19 +496,36 @@ export const mongoRepo = {
      * Compared tick to tick → edits by any app (SDK, main app, this dashboard) and deletions.
      */
     async prints(sinceMs, limit) {
-      const docs = await col('metadata')
-        .find(
-          { _id: { $gte: ObjectId.createFromTime(Math.floor(sinceMs / 1000)) } },
-          { projection: { env_id: 1, mrp: 1, mfg_date: 1, expiry_date: 1, batch_no: 1, ean: 1, annotation_version: 1, img_url: 1 } },
-        )
-        .sort({ _id: -1 })
-        .limit(limit)
-        .toArray();
-      return docs.map((d) => ({
-        id: String(d._id),
-        env: d.env_id ?? null,
-        hash: JSON.stringify([d.mrp, d.mfg_date, d.expiry_date, d.batch_no, d.ean, d.annotation_version, d.img_url]),
-      }));
+      const since = { _id: { $gte: ObjectId.createFromTime(Math.floor(sinceMs / 1000)) } };
+      const [docs, results] = await Promise.all([
+        col('metadata')
+          .find(since, {
+            projection: { env_id: 1, mrp: 1, mfg_date: 1, expiry_date: 1, batch_no: 1, ean: 1, annotation_version: 1, img_url: 1, result_id: 1 },
+          })
+          .sort({ _id: -1 })
+          .limit(limit)
+          .toArray(),
+        // New scans are edited in session_results (SDK /update_data + this dashboard).
+        col('session_results')
+          .find(since, { projection: { env_id: 1, predicted: 1, edited_values: 1, edited_by: 1, updated_at: 1 } })
+          .sort({ _id: -1 })
+          .limit(limit)
+          .toArray(),
+      ]);
+      return [
+        ...docs.map((d) => ({
+          id: String(d._id),
+          env: d.env_id ?? null,
+          hash: JSON.stringify([d.mrp, d.mfg_date, d.expiry_date, d.batch_no, d.ean, d.annotation_version, d.img_url, d.result_id]),
+        })),
+        ...results.map((d) => ({
+          id: String(d._id),
+          env: d.env_id ?? null,
+          hash: JSON.stringify([d.predicted, d.edited_values, d.edited_by, d.updated_at]),
+        })),
+      ]
+        .sort((a, b) => b.id.localeCompare(a.id))
+        .slice(0, limit);
     },
 
     /** Total metadata docs (collection metadata, no scan) — a drop means captures were deleted. */
@@ -430,7 +612,7 @@ export const mongoRepo = {
       const counts = { ...empty };
       for (const c of res.counts) counts[c._id] = c.n;
       counts.all = counts.ok + counts.near_expiry + counts.expired;
-      return { items: res.items.map(toDto), total: counts[status], counts };
+      return { items: await toDtos(res.items), total: counts[status], counts };
     },
 
     /** Captures per IST day in [from, to] + latest day with data — calendar dots. */
@@ -537,7 +719,8 @@ export const mongoRepo = {
       const rows = await col('metadata')
         .aggregate(rowStages(envIds, { from, to }), { allowDiskUse: true })
         .toArray();
-      return computeEditStats(rows.map(toDto), { detail });
+      // Scans without a result have no values to compare → left out of stats.
+      return computeEditStats((await toDtos(rows)).filter((d) => !d.noResult), { detail });
     },
 
     /** Stats drill-down list: scoped captures in range + search, filtered by edit rules in JS. */
@@ -577,6 +760,9 @@ export const mongoRepo = {
       await assertCanAccess(user.id, id);
       const cur = await getRow(id);
       if (!cur) return null;
+      // New scan → edit its latest recapture's session_results (single sort key: Cosmos ignores 2nd keys on ties).
+      const scan = await col('metadata').findOne({ env_id: id, started_at: { $exists: true } }, { sort: { started_at: -1 }, projection: { _id: 1 } });
+      if (scan) return updateScan(id, scan, cur, metadata, user);
       const [latest] = await col('metadata').find({ env_id: id }).sort({ timestamp: -1 }).limit(1).toArray();
       const now = new Date();
       const updated = await col('metadata').findOneAndUpdate(

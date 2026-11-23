@@ -165,7 +165,7 @@ function DocumentDetail({ id }: { id: string }) {
   const qc = useQueryClient();
   const { user } = useAuth();
   const { can } = useAccess();
-  const canEdit = can('edit_capture');
+  const canEditCaptures = can('edit_capture');
   // "Submit & next" opens the next capture already in edit mode.
   const [editing, setEditing] = useState(() => !!(location.state as { edit?: boolean } | null)?.edit);
   const [help, setHelp] = useState(false);
@@ -184,6 +184,12 @@ function DocumentDetail({ id }: { id: string }) {
     queryKey: ['document', id],
     queryFn: () => api.getDocument(id),
   });
+  // New scan without a saved result → nothing to edit.
+  const canEdit = canEditCaptures && !doc?.noResult;
+  // "Submit & next" may land on such a scan → leave edit mode.
+  useEffect(() => {
+    if (doc?.noResult) setEditing(false);
+  }, [doc?.noResult]);
 
   const mutation = useMutation({
     mutationFn: (m: DocMetadata) => api.updateDocument(id, m, user?.name || user?.email || 'unknown'),
@@ -586,7 +592,7 @@ function DocumentDetail({ id }: { id: string }) {
       >
         <Box sx={{ position: { md: 'sticky' }, top: { md: 92 } }}>
           {doc ? (
-            <ImageViewer key={doc.id} src={doc.imageUrl} alt={doc.productName} />
+            <ImageViewer key={doc.id} src={doc.imageUrl} alt={doc.productName} images={doc.images} />
           ) : (
             <Skeleton variant="rounded" sx={{ width: '100%', aspectRatio: '4 / 3', height: 'auto' }} />
           )}
@@ -651,10 +657,12 @@ function DocumentDetail({ id }: { id: string }) {
                   onDirtyChange={onDirtyChange}
                 />
                 <Typography sx={{ fontSize: 12.5, color: colors.muted }}>
-                  Current values are kept in edit history. Status updates from the dates (near expiry = under{' '}
-                  {NEAR_EXPIRY_PCT}% shelf life left).
+                  {doc.images ? 'Original values stay visible below.' : 'Current values are kept in edit history.'} Status
+                  updates from the dates (near expiry = under {NEAR_EXPIRY_PCT}% shelf life left).
                 </Typography>
               </>
+            ) : doc.noResult ? (
+              <Alert severity="info">No result saved for this scan yet, so there are no values to show or edit.</Alert>
             ) : (
               <Box
                 sx={{
