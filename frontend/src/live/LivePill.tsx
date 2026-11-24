@@ -97,13 +97,11 @@ export default function LivePill({ view, onRefresh }: { view: LiveView; onRefres
     );
   }
 
-  const live = status === 'live' || status === 'polling';
+  const live = status === 'live';
   const tip =
     status === 'live'
-      ? 'New captures appear here automatically'
-      : status === 'polling'
-        ? 'Checking for new captures every 15 seconds'
-        : status === 'connecting'
+      ? '' // no tooltip while live
+      : status === 'connecting'
           ? 'Connecting to live updates…'
           : 'Live updates unavailable — refresh the page to retry';
   return (

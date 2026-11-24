@@ -103,7 +103,7 @@ export function computeEditStats(docs, { detail = false } = {}) {
     const date = istDay(new Date(d.createdAt));
     add(changed, fields);
 
-    const dd = days.get(date) ?? { date, total: 0, changed: zero() };
+    const dd = days.get(date) ?? { date, total: 0, changed: zero(), bySource: { dashboard: zero(), sdk: zero() } };
     dd.total++;
     add(dd.changed, fields);
     days.set(date, dd);
@@ -120,6 +120,8 @@ export function computeEditStats(docs, { detail = false } = {}) {
     for (const [name, v] of byEditor) v.fields.forEach((f) => src[sourceOf(name)].add(f));
     add(bySource.dashboard, [...src.dashboard]);
     add(bySource.sdk, [...src.sdk]);
+    add(dd.bySource.dashboard, [...src.dashboard]);
+    add(dd.bySource.sdk, [...src.sdk]);
 
     for (const [name, v] of byEditor) {
       const p = people.get(name) ?? { name, images: 0, saves: 0, changed: zero() };

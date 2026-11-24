@@ -31,6 +31,7 @@ import { useAccess } from '../auth/useAccess';
 import DateRangeFilter from '../components/DateRangeFilter';
 import DocumentTable from '../components/DocumentTable';
 import ExportStatsDialog from '../components/ExportStatsDialog';
+import StatsTrendChart from '../components/StatsTrendChart';
 import { ScopeFilters } from '../components/ListToolbar';
 import PageBreadcrumbs from '../components/PageBreadcrumbs';
 import { readDay, useListState, type ListState } from '../hooks/useListState';
@@ -629,6 +630,8 @@ export default function StatsPage() {
             )}
 
             {where === 'day' && active && <DrillSection drill={active} state={state} onClose={closeDrill} sectionRef={sectionRef} />}
+
+            <StatsTrendChart mode={mode} pageFilter={sf} />
 
           </>
         )

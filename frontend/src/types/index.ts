@@ -151,6 +151,8 @@ export interface DayStats {
   date: string;
   total: number;
   changed: FieldCounts;
+  /** Images that day where that source changed the field. */
+  bySource: Record<EditSource, FieldCounts>;
 }
 
 export interface AnnotatorStats {
@@ -173,7 +175,14 @@ export interface StatsRow {
   editors: string[];
   saves: number;
   lastEditedAt: string | null;
+  /** New scans only (latest recapture); old captures → null/missing. */
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  latencyMs?: Partial<Record<LatencyKey, number>> | null;
 }
+
+export const LATENCY_KEYS = ['gate', 'patch', 'reader', 'vlm', 'total'] as const;
+export type LatencyKey = (typeof LATENCY_KEYS)[number];
 
 export type EditSource = 'dashboard' | 'sdk';
 

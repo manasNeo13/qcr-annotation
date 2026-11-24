@@ -108,6 +108,40 @@ async function assertCanAccess(userId, envId) {
   }
 }
 
+// ── Scan timings (CSV detail) ────────────────────────────────────────────
+const isoOrNull = (v) => {
+  if (v == null || v === '') return null;
+  const d = v instanceof Date ? v : new Date(v);
+  return Number.isNaN(d.getTime()) ? String(v) : d.toISOString();
+};
+
+/**
+ * New scans → started_at, finished_at, latency_ms of the latest recapture (same pick as the list).
+ * Plain find + JS pick (no extra aggregation stages → no Cosmos quirks). Old captures stay without.
+ */
+async function addScanTimings(rows) {
+  const ids = rows.map((r) => r.id);
+  const latest = new Map();
+  for (let i = 0; i < ids.length; i += 1000) {
+    const docs = await col('metadata')
+      .find(
+        { env_id: { $in: ids.slice(i, i + 1000) }, started_at: { $exists: true } },
+        { projection: { _id: 0, env_id: 1, started_at: 1, finished_at: 1, latency_ms: 1 } },
+      )
+      .toArray();
+    for (const d of docs) {
+      const cur = latest.get(d.env_id);
+      if (!cur || new Date(d.started_at) > new Date(cur.started_at)) latest.set(d.env_id, d);
+    }
+  }
+  for (const r of rows) {
+    const d = latest.get(r.id);
+    r.startedAt = d ? isoOrNull(d.started_at) : null;
+    r.finishedAt = d ? isoOrNull(d.finished_at) : null;
+    r.latencyMs = d && d.latency_ms && typeof d.latency_ms === 'object' ? d.latency_ms : null;
+  }
+}
+
 // ── Aggregation ──────────────────────────────────────────────────────────
 const firstNonNull = (arr) => ({ $arrayElemAt: [{ $filter: { input: arr, cond: { $ne: ['$$this', null] } } }, 0] });
 const toDate = (x) => ({ $convert: { input: x, to: 'date', onError: null, onNull: null } });
@@ -720,7 +754,9 @@ export const mongoRepo = {
         .aggregate(rowStages(envIds, { from, to }), { allowDiskUse: true })
         .toArray();
       // Scans without a result have no values to compare → left out of stats.
-      return computeEditStats((await toDtos(rows)).filter((d) => !d.noResult), { detail });
+      const stats = computeEditStats((await toDtos(rows)).filter((d) => !d.noResult), { detail });
+      if (detail && stats.rows?.length) await addScanTimings(stats.rows);
+      return stats;
     },
 
     /** Stats drill-down list: scoped captures in range + search, filtered by edit rules in JS. */

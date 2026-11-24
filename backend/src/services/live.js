@@ -1,10 +1,10 @@
 /**
- * Live captures: one shared poller per backend process → pushes "new capture" events to browsers.
+ * Live captures: one shared poller per backend process; browsers ask /api/live/events every 15s.
  *
- *   DB  ──(every 15s, metadata by _id)──▶ poller ──▶ SSE clients (/api/live/stream)
- *                                              └──▶ buffer (15 min) ──▶ fallback polling (/api/live/events)
+ *   DB  ──(every 15s, metadata by _id)──▶ poller ──▶ buffer (15 min) ──▶ /api/live/events?since=
  *
- * - Polls only while someone is watching (open stream, or a fallback poll in the last ~70s).
+ * - Polls only while someone is watching (a browser asked in the last ~40s).
+ * - Browser away longer than the buffer / poller restarted since → `stale: true` → browser reloads lists.
  * - Re-reads the last 2 min each tick (inserts can land slightly out of _id order) + `seen` set → no dupes.
  * - Docs without image / environment yet are re-checked for up to 10 min, then dropped.
  * - DB errors → back off (15s, 30s, 60s, max 2 min). Never crashes the API.
@@ -16,17 +16,14 @@
 import { repo } from '../repos/index.js';
 
 export const POLL_MS = 15_000;
-export const HEARTBEAT_MS = 25_000;
 const OVERLAP_MS = 120_000;
 const WAIT_MAX_MS = 10 * 60_000;
 const BUFFER_MS = 15 * 60_000;
-const FALLBACK_ACTIVE_MS = 2 * POLL_MS + 10_000;
+const ACTIVE_MS = 2 * POLL_MS + 10_000;
 const MAX_BACKOFF = 8;
 const EDIT_WINDOW_MS = 24 * 3600_000;
 const EDIT_LIMIT = 5000; // newest docs fingerprinted per tick
 
-/** @type {Set<{ user: object, send: (event: string, data: object) => void, close: () => void }>} */
-const clients = new Set();
 const seen = new Map(); // metadata _id → first seen (ms)
 const waiting = new Map(); // metadata _id → first seen (ms); no image / env yet
 /** Announced events: { id, env, ts, ean, batch, stores, at } (at = server ms when announced). */
@@ -37,7 +34,8 @@ let timer = null;
 let primed = false;
 let bookmark = 0; // newest insert time seen (ms)
 let failures = 0;
-let lastFallbackPoll = 0;
+let lastPoll = 0;
+let runStart = 0; // server ms the current poller run started (events before it unknown)
 let lastCount = null; // metadata doc count at last tick
 let changedAt = 0; // server ms of last detected deletion
 let prints = null; // metadata _id → { env, hash } at last tick
@@ -47,7 +45,7 @@ let updBuffer = [];
 /** Called with new events (e.g. clear cached id lists). */
 export const onNewCaptures = (fn) => listeners.add(fn);
 
-const isActive = () => clients.size > 0 || Date.now() - lastFallbackPoll < FALLBACK_ACTIVE_MS;
+const isActive = () => Date.now() - lastPoll < ACTIVE_MS;
 const publicEvent = ({ id, env, ts, ean, batch, at }) => ({ id, env, ts, ean, batch, at });
 
 function ensureRunning() {
@@ -57,6 +55,7 @@ function ensureRunning() {
   lastCount = null;
   prints = null;
   bookmark = Date.now();
+  runStart = bookmark;
   failures = 0;
   timer = setTimeout(tick, 0);
 }
@@ -125,7 +124,7 @@ async function detectEdits() {
 
 async function tick() {
   timer = null;
-  if (!isActive()) return; // nobody watching → stop; next client restarts
+  if (!isActive()) return; // nobody watching → stop; next poll restarts
   try {
     const events = await collect();
     const { edited, removed } = await detectEdits();
@@ -139,29 +138,17 @@ async function tick() {
       const ups = edited.filter((env) => stores.has(env)).map((env) => ({ env, stores: stores.get(env), at: now }));
       updBuffer = [...updBuffer.filter((u) => now - u.at < BUFFER_MS), ...ups];
       for (const fn of listeners) fn([]); // status/order may change → drop cached id lists
-      await Promise.all(
-        [...clients].map(async (c) => {
-          try {
-            const mine = await repo.live.visibleTo(c.user, ups);
-            if (mine.length) c.send('updated', { now, envs: mine.map((u) => u.env) });
-          } catch {
-            /* handled on next captures broadcast */
-          }
-        }),
-      );
     }
     if (deleted) {
       changedAt = Date.now();
       repo.live.onAnnounced([]);
       for (const fn of listeners) fn([]);
-      for (const c of clients) c.send('changed', { now: changedAt });
     }
     if (events.length) {
       const now = Date.now();
       buffer = [...buffer.filter((e) => now - e.at < BUFFER_MS), ...events];
-      repo.live.onAnnounced(events); // before broadcast → browsers' reload sees the new captures
+      repo.live.onAnnounced(events); // before browsers ask → their reload sees the new captures
       for (const fn of listeners) fn(events);
-      await broadcast(events);
     }
   } catch (e) {
     failures = Math.min(failures + 1, MAX_BACKOFF);
@@ -170,83 +157,31 @@ async function tick() {
   timer = setTimeout(tick, POLL_MS * 2 ** Math.min(failures, 3));
 }
 
-async function broadcast(events) {
-  await Promise.all(
-    [...clients].map(async (c) => {
-      try {
-        const mine = await repo.live.visibleTo(c.user, events);
-        if (mine.length) c.send('captures', { now: Date.now(), events: mine.map(publicEvent) });
-      } catch (e) {
-        if (e.status === 401) c.close(); // account deactivated
-      }
-    }),
-  );
-}
-
-/** Buffered events after `since` (server ms) visible to user. */
-async function eventsSince(user, since) {
-  if (!since) return [];
-  return (await repo.live.visibleTo(user, buffer.filter((e) => e.at > since))).map(publicEvent);
-}
-
-/** GET /api/live/stream — Server-Sent Events. ?since=<server ms> → catch up after reconnect. */
-export async function stream(req, res) {
-  await repo.live.visibleTo(req.user, []); // 401 if inactive, warms scope cache
-
-  res.status(200).set({
-    'Content-Type': 'text/event-stream; charset=utf-8',
-    'Cache-Control': 'no-cache, no-transform',
-    Connection: 'keep-alive',
-    'X-Accel-Buffering': 'no', // nginx: don't hold events
-  });
-  res.flushHeaders();
-  req.socket.setTimeout?.(0);
-  req.socket.setNoDelay?.(true);
-
-  let open = true;
-  let beat = null;
-  const write = (chunk) => open && res.write(chunk);
-  const client = {
-    user: req.user,
-    send: (event, data) => write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`),
-    close: () => {
-      if (!open) return;
-      open = false;
-      clearInterval(beat);
-      clients.delete(client);
-      res.end();
-    },
-  };
-
-  req.on('close', () => client.close());
-
-  // 2 KB padding: some proxies hold the first bytes until a buffer fills.
-  write(`:${' '.repeat(2048)}\nretry: 5000\n\n`);
-  client.send('hello', { now: Date.now(), interval: POLL_MS });
-  const missed = await eventsSince(req.user, Number(req.query.since) || 0);
-  if (!open) return;
-  if (missed.length) client.send('captures', { now: Date.now(), events: missed });
-
-  beat = setInterval(() => client.send('ping', { now: Date.now() }), HEARTBEAT_MS);
-  clients.add(client);
-  ensureRunning();
-}
-
-/** GET /api/live/events?since=<server ms> — fallback when the stream can't get through. */
+/**
+ * GET /api/live/events?since=<server ms of last answer>
+ * → new captures + edited captures since then; `stale` = gap we can't fill (browser reloads lists).
+ */
 export async function poll(req, res) {
-  lastFallbackPoll = Date.now();
+  lastPoll = Date.now();
   ensureRunning();
-  const events = await eventsSince(req.user, Number(req.query.since) || 0);
   const since = Number(req.query.since) || 0;
-  const updated = since
-    ? [...new Set((await repo.live.visibleTo(req.user, updBuffer.filter((u) => u.at > since))).map((u) => u.env))]
-    : [];
-  res.set('Cache-Control', 'no-store').json({ now: Date.now(), interval: POLL_MS, events, updated, changed: !!since && changedAt > since });
+  const stale = !!since && (since < runStart || Date.now() - since > BUFFER_MS);
+  const visible = async (list) => (since && !stale ? await repo.live.visibleTo(req.user, list) : []);
+  const events = (await visible(buffer.filter((e) => e.at > since))).map(publicEvent);
+  const updated = [...new Set((await visible(updBuffer.filter((u) => u.at > since))).map((u) => u.env))];
+  if (!since) await repo.live.visibleTo(req.user, []); // 401 if inactive, warms scope cache
+  res.set('Cache-Control', 'no-store').json({
+    now: Date.now(),
+    interval: POLL_MS,
+    events,
+    updated,
+    changed: !!since && changedAt > since,
+    stale,
+  });
 }
 
-/** Close streams on shutdown (else server.close() waits forever). */
+/** Stop the poller on shutdown. */
 export function closeAll() {
-  for (const c of clients) c.close();
   if (timer) clearTimeout(timer);
   timer = null;
 }

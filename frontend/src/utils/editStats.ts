@@ -2,6 +2,7 @@
  * Edit stats helpers. computeEditStats mirrors backend lib/editStats.js (mock mode only).
  * Changed = original OCR (history[0]) ≠ current, per field, after normalising.
  */
+import { LATENCY_KEYS } from '../types';
 import type {
   AnnotatorStats,
   DayStats,
@@ -92,7 +93,7 @@ export function computeEditStats(
     const fields = diff(original, d.metadata);
     const date = dayOf(d.createdAt);
     add(changed, fields);
-    const dd = days.get(date) ?? { date, total: 0, changed: zero() };
+    const dd = days.get(date) ?? { date, total: 0, changed: zero(), bySource: { dashboard: zero(), sdk: zero() } };
     dd.total++;
     add(dd.changed, fields);
     days.set(date, dd);
@@ -111,6 +112,8 @@ export function computeEditStats(
     for (const [name, v] of byEditor) v.fields.forEach((f) => src[sourceOf(name)].add(f));
     add(bySource.dashboard, [...src.dashboard]);
     add(bySource.sdk, [...src.sdk]);
+    add(dd.bySource.dashboard, [...src.dashboard]);
+    add(dd.bySource.sdk, [...src.sdk]);
     for (const [name, v] of byEditor) {
       const p = people.get(name) ?? { name, images: 0, saves: 0, changed: zero() };
       p.images++;
@@ -203,6 +206,7 @@ export const detailLines = (rows: StatsRow[]): Cell[][] => [
     'Original batch', 'Final batch', 'Original MRP', 'Final MRP',
     'Original MFD', 'Final MFD', 'Original expiry', 'Final expiry',
     'Fields changed', 'Any change', 'Annotators', 'Last edited at',
+    'Started at', 'Finished at', ...LATENCY_KEYS.map((k) => `Latency ${k} (ms)`),
   ],
   ...rows.map((r) => [
     r.id, r.captureDay, r.ean,
@@ -210,5 +214,6 @@ export const detailLines = (rows: StatsRow[]): Cell[][] => [
     r.original.mfgDate, r.final.mfgDate, r.original.expiryDate, r.final.expiryDate,
     r.changed.map((k) => FIELD_LABELS[k]).join(' | '), r.changed.length ? 'Yes' : 'No',
     r.editors.join(' | '), r.lastEditedAt ?? '',
+    r.startedAt ?? '', r.finishedAt ?? '', ...LATENCY_KEYS.map((k) => r.latencyMs?.[k] ?? ''),
   ]),
 ];
