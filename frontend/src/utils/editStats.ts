@@ -200,13 +200,29 @@ export const annotatorLines = (list: AnnotatorStats[]): Cell[][] => [
   ...list.map((a) => [a.name, a.images, ...countCols(a.changed, a.images)]),
 ];
 
+/** ISO/UTC → "24 Nov 2026, 01:45:30 PM" in IST. Bad/empty input passes through. */
+const IST_FMT = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Asia/Kolkata',
+  day: '2-digit', month: 'short', year: 'numeric',
+  hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true,
+});
+export const toIST = (v: string | null | undefined): string => {
+  if (!v) return '';
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return v;
+  const p = Object.fromEntries(IST_FMT.formatToParts(d).map((x) => [x.type, x.value]));
+  return `${p.day} ${p.month} ${p.year}, ${p.hour}:${p.minute}:${p.second} ${String(p.dayPeriod).toUpperCase()}`;
+};
+
+const latencyHead = (k: (typeof LATENCY_KEYS)[number]) => (k === 'vlm' ? 'Model latency (ms)' : `Latency ${k} (ms)`);
+
 export const detailLines = (rows: StatsRow[]): Cell[][] => [
   [
     'Capture ID', 'Capture day', 'EAN',
     'Original batch', 'Final batch', 'Original MRP', 'Final MRP',
     'Original MFD', 'Final MFD', 'Original expiry', 'Final expiry',
     'Fields changed', 'Any change', 'Annotators', 'Last edited at',
-    'Started at', 'Finished at', ...LATENCY_KEYS.map((k) => `Latency ${k} (ms)`),
+    'Started at (IST)', 'Finished at (IST)', ...LATENCY_KEYS.map(latencyHead),
   ],
   ...rows.map((r) => [
     r.id, r.captureDay, r.ean,
@@ -214,6 +230,6 @@ export const detailLines = (rows: StatsRow[]): Cell[][] => [
     r.original.mfgDate, r.final.mfgDate, r.original.expiryDate, r.final.expiryDate,
     r.changed.map((k) => FIELD_LABELS[k]).join(' | '), r.changed.length ? 'Yes' : 'No',
     r.editors.join(' | '), r.lastEditedAt ?? '',
-    r.startedAt ?? '', r.finishedAt ?? '', ...LATENCY_KEYS.map((k) => r.latencyMs?.[k] ?? ''),
+    toIST(r.startedAt), toIST(r.finishedAt), ...LATENCY_KEYS.map((k) => r.latencyMs?.[k] ?? ''),
   ]),
 ];
