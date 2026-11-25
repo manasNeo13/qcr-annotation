@@ -134,23 +134,6 @@ export default function AppLayout() {
                 QCR
               </Box>
             </Typography>
-            <Typography
-              component="span"
-              sx={{
-                display: { xs: 'none', sm: 'inline' },
-                fontSize: 10,
-                fontWeight: 700,
-                letterSpacing: '1.2px',
-                textTransform: 'uppercase',
-                color: colors.brandDark,
-                bgcolor: colors.brandSoft,
-                px: 1,
-                py: 0.25,
-                borderRadius: '5px',
-              }}
-            >
-              Annotation
-            </Typography>
           </Box>
 
           <NavTabs />

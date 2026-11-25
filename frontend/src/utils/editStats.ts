@@ -2,6 +2,7 @@
  * Edit stats helpers. computeEditStats mirrors backend lib/editStats.js (mock mode only).
  * Changed = original OCR (history[0]) ≠ current, per field, after normalising.
  */
+import { LATENCY_KEYS } from '../types';
 import type {
   AnnotatorStats,
   DayStats,
@@ -92,7 +93,7 @@ export function computeEditStats(
     const fields = diff(original, d.metadata);
     const date = dayOf(d.createdAt);
     add(changed, fields);
-    const dd = days.get(date) ?? { date, total: 0, changed: zero() };
+    const dd = days.get(date) ?? { date, total: 0, changed: zero(), bySource: { dashboard: zero(), sdk: zero() } };
     dd.total++;
     add(dd.changed, fields);
     days.set(date, dd);
@@ -111,6 +112,8 @@ export function computeEditStats(
     for (const [name, v] of byEditor) v.fields.forEach((f) => src[sourceOf(name)].add(f));
     add(bySource.dashboard, [...src.dashboard]);
     add(bySource.sdk, [...src.sdk]);
+    add(dd.bySource.dashboard, [...src.dashboard]);
+    add(dd.bySource.sdk, [...src.sdk]);
     for (const [name, v] of byEditor) {
       const p = people.get(name) ?? { name, images: 0, saves: 0, changed: zero() };
       p.images++;
@@ -197,12 +200,29 @@ export const annotatorLines = (list: AnnotatorStats[]): Cell[][] => [
   ...list.map((a) => [a.name, a.images, ...countCols(a.changed, a.images)]),
 ];
 
+/** ISO/UTC → "24 Nov 2026, 01:45:30 PM" in IST. Bad/empty input passes through. */
+const IST_FMT = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Asia/Kolkata',
+  day: '2-digit', month: 'short', year: 'numeric',
+  hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true,
+});
+export const toIST = (v: string | null | undefined): string => {
+  if (!v) return '';
+  const d = new Date(v);
+  if (Number.isNaN(d.getTime())) return v;
+  const p = Object.fromEntries(IST_FMT.formatToParts(d).map((x) => [x.type, x.value]));
+  return `${p.day} ${p.month} ${p.year}, ${p.hour}:${p.minute}:${p.second} ${String(p.dayPeriod).toUpperCase()}`;
+};
+
+const latencyHead = (k: (typeof LATENCY_KEYS)[number]) => (k === 'vlm' ? 'Model latency (ms)' : `Latency ${k} (ms)`);
+
 export const detailLines = (rows: StatsRow[]): Cell[][] => [
   [
     'Capture ID', 'Capture day', 'EAN',
     'Original batch', 'Final batch', 'Original MRP', 'Final MRP',
     'Original MFD', 'Final MFD', 'Original expiry', 'Final expiry',
     'Fields changed', 'Any change', 'Annotators', 'Last edited at',
+    'Started at (IST)', 'Finished at (IST)', ...LATENCY_KEYS.map(latencyHead),
   ],
   ...rows.map((r) => [
     r.id, r.captureDay, r.ean,
@@ -210,5 +230,6 @@ export const detailLines = (rows: StatsRow[]): Cell[][] => [
     r.original.mfgDate, r.final.mfgDate, r.original.expiryDate, r.final.expiryDate,
     r.changed.map((k) => FIELD_LABELS[k]).join(' | '), r.changed.length ? 'Yes' : 'No',
     r.editors.join(' | '), r.lastEditedAt ?? '',
+    toIST(r.startedAt), toIST(r.finishedAt), ...LATENCY_KEYS.map((k) => r.latencyMs?.[k] ?? ''),
   ]),
 ];
