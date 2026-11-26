@@ -13,7 +13,11 @@
  * - Deletions: fingerprint vanished, or total doc count dropped → "changed" to everyone → browsers reload lists.
  *   (Older captures: edits not seen; delete + insert within one tick can hide a deletion.)
  */
+import { env } from '../config/env.js';
 import { repo } from '../repos/index.js';
+
+// Split team: assign new captures BEFORE announcing → members' lists + events already filtered.
+const split = env.DATA_SOURCE === 'mongo' ? await import('../repos/split.js') : null;
 
 export const POLL_MS = 15_000;
 const OVERLAP_MS = 120_000;
@@ -126,6 +130,7 @@ async function tick() {
   timer = null;
   if (!isActive()) return; // nobody watching → stop; next poll restarts
   try {
+    await split?.assignNow().catch((e) => console.warn(`[split] assign failed: ${e.message}`));
     const events = await collect();
     const { edited, removed } = await detectEdits();
     const count = await repo.live.count();

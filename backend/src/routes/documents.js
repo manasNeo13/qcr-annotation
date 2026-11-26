@@ -104,6 +104,21 @@ router.get('/:id/neighbors', canView, async (req, res) => {
   });
 });
 
+/**
+ * Serial number → capture id. No. 1 = OLDEST in the filter, so numbers stay put when new captures
+ * arrive on top (newest-first list). GET /documents/at?n=501&<list filter>
+ */
+router.get('/at', canView, async (req, res) => {
+  const { n: raw, ...q } = req.query;
+  const n = Number(raw);
+  const { page: _p, pageSize: _s, ...filter } = parse(neighborsQuerySchema, q);
+  const ids = await orderedIdsFor(filter, req.user);
+  if (!Number.isInteger(n) || n < 1 || n > ids.length) {
+    throw new HttpError(404, ids.length ? `Enter a number from 1 to ${ids.length}` : 'No captures in this list');
+  }
+  res.json({ id: ids[ids.length - n], total: ids.length });
+});
+
 router.get('/:id', canView, async (req, res) => {
   const doc = await repo.documents.get(req.params.id, req.user);
   if (!doc) throw notFound('Document');

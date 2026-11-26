@@ -30,6 +30,10 @@ const ACTION: Record<AuditEntry['action'], string> = {
   'role.create': 'Created role',
   'role.update': 'Changed permissions',
   'role.delete': 'Deleted role',
+  'split.add': 'Added to split team',
+  'split.remove': 'Removed from split team',
+  'split.move': 'Moved captures',
+  'split.divide': 'Divided past days',
 };
 
 const FIELD: Record<string, string> = {
@@ -43,6 +47,10 @@ const FIELD: Record<string, string> = {
   password: 'Password',
   permissions: 'Permissions',
   users: 'Users moved to No role',
+  members: 'Members',
+  owner: 'Assigned to',
+  days: 'Days',
+  captures: 'Captures',
 };
 
 const show = (field: string, v: unknown): string => {
@@ -148,7 +156,7 @@ export default function AuditTab() {
                   <TableCell>
                     <Typography sx={{ fontWeight: 600, fontSize: 13.5 }}>{e.target?.name || '—'}</Typography>
                     <Typography sx={{ fontSize: 12, color: colors.muted }}>
-                      {e.target?.type === 'role' ? 'Role' : `User ${e.target?.id ?? ''}`}
+                      {e.target?.type === 'role' ? 'Role' : e.target?.type === 'split' ? 'Work split' : `User ${e.target?.id ?? ''}`}
                     </Typography>
                   </TableCell>
                   <TableCell>

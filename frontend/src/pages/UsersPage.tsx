@@ -2,6 +2,7 @@ import { useSearchParams } from 'react-router-dom';
 import { Box, Paper, Tab, Tabs } from '@mui/material';
 import AuditTab from '../components/admin/AuditTab';
 import RolesTab from '../components/admin/RolesTab';
+import SplitTeamTab from '../components/admin/SplitTeamTab';
 import UsersTab from '../components/admin/UsersTab';
 import PageBreadcrumbs from '../components/PageBreadcrumbs';
 import { colors } from '../theme';
@@ -9,6 +10,7 @@ import { colors } from '../theme';
 const TABS = [
   { key: 'users', label: 'Users' },
   { key: 'roles', label: 'Roles & permissions' },
+  { key: 'split', label: 'Split team' },
   { key: 'log', label: 'Change log' },
 ] as const;
 type TabKey = (typeof TABS)[number]['key'];
@@ -35,6 +37,7 @@ export default function UsersPage() {
         </Tabs>
         {tab === 'users' && <UsersTab />}
         {tab === 'roles' && <RolesTab />}
+        {tab === 'split' && <SplitTeamTab />}
         {tab === 'log' && <AuditTab />}
       </Paper>
     </Box>

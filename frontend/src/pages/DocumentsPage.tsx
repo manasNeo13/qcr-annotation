@@ -36,7 +36,7 @@ export default function DocumentsPage() {
     navigate(`/documents/${encodeURIComponent(id)}?${qs}`);
   };
 
-  const crumbs: Crumb[] = [{ label: 'Filter Table' }];
+  const crumbs: Crumb[] = [{ label: 'Annotation Table' }];
 
   // Live: new captures → reload current page by itself, new rows glow.
   const qc = useQueryClient();

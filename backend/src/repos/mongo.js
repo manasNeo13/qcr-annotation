@@ -36,7 +36,21 @@ export const clearAccessCache = (userId) => {
   if (userId) return accessCache.delete(userId);
   accessCache.clear();
   scanCache = null;
+  ownerCache = null;
 };
+
+/** Split team: env_id → assigned user id (only assigned captures). Shared, cached 1 min. */
+let ownerCache = null; // { at, map: Promise<Map> }
+function owners() {
+  if (ownerCache && Date.now() - ownerCache.at < ACCESS_TTL_MS) return ownerCache.map;
+  const map = col('metadata')
+    .find({ assigned_to: { $exists: true } }, { projection: { _id: 0, env_id: 1, assigned_to: 1 } })
+    .toArray()
+    .then((docs) => new Map(docs.map((d) => [d.env_id, String(d.assigned_to)])));
+  ownerCache = { at: Date.now(), map };
+  map.catch(() => (ownerCache = null));
+  return map;
+}
 
 /** New-schema scans (have started_at): env_id → client (metadata.client). Shared by all users, cached 1 min. */
 let scanCache = null; // { at, rows: Promise<{ env, client }[]> }
@@ -62,15 +76,31 @@ const clientKey = (v) => String(v ?? '').trim().toLowerCase();
 /**
  * Per-user scope by CLIENT (stores ignored). Cached 1 min.
  *   NHQ (super admin) → every capture, incl. captures with no client.
+ *   Split team member → every client: old (unassigned) captures + captures assigned to them (repos/split.js).
  *   Others → captures whose environment.client_name is in users.clients. None assigned → nothing.
  * clientKeys: null = all; else Set of client keys → live capture events (services/live.js).
  */
 async function scope(userId, fresh = false) {
   const hit = accessCache.get(userId);
   if (!fresh && hit && Date.now() - hit.at < ACCESS_TTL_MS) return hit;
-  const user = await col('users').findOne({ id: userId }, { projection: { role: 1, status: 1, clients: 1 } });
+  const user = await col('users').findOne({ id: userId }, { projection: { role: 1, status: 1, clients: 1, split_team: 1 } });
   if (!user || user.status === false) throw new HttpError(401, 'Account not active');
   const superAdmin = isSuperAdmin(roleKey(user.role));
+  const member = !superAdmin && user.split_team === true;
+  if (member) {
+    const [raw, scans, own] = await Promise.all([
+      col('environment').find({}, { projection: { _id: 0, env_id: 1, client_name: 1 } }).toArray(),
+      scanEnvs(),
+      owners(),
+    ]);
+    const rows = [...raw.filter((r) => r.env_id).map((r) => ({ env: r.env_id, client: clientKey(r.client_name) })), ...scans].filter((r) => {
+      const o = own.get(r.env);
+      return !o || o === userId;
+    });
+    const s = { at: Date.now(), rows, envIds: rows.map((r) => r.env), envSet: new Set(rows.map((r) => r.env)), clientKeys: null, superAdmin, member };
+    accessCache.set(userId, s);
+    return s;
+  }
   const mine = clientsOf(user).map(clientKey);
   const [raw, scans] =
     superAdmin || mine.length
@@ -116,7 +146,7 @@ const isoOrNull = (v) => {
 };
 
 /**
- * New scans → started_at, finished_at, latency_ms of the latest recapture (same pick as the list).
+ * New scans → request_id, started_at, finished_at, latency_ms of the latest recapture (same pick as the list).
  * Plain find + JS pick (no extra aggregation stages → no Cosmos quirks). Old captures stay without.
  */
 async function addScanTimings(rows) {
@@ -126,7 +156,7 @@ async function addScanTimings(rows) {
     const docs = await col('metadata')
       .find(
         { env_id: { $in: ids.slice(i, i + 1000) }, started_at: { $exists: true } },
-        { projection: { _id: 0, env_id: 1, started_at: 1, finished_at: 1, latency_ms: 1 } },
+        { projection: { _id: 0, env_id: 1, request_id: 1, started_at: 1, finished_at: 1, latency_ms: 1 } },
       )
       .toArray();
     for (const d of docs) {
@@ -136,6 +166,7 @@ async function addScanTimings(rows) {
   }
   for (const r of rows) {
     const d = latest.get(r.id);
+    r.requestId = d?.request_id != null ? String(d.request_id) : null;
     r.startedAt = d ? isoOrNull(d.started_at) : null;
     r.finishedAt = d ? isoOrNull(d.finished_at) : null;
     r.latencyMs = d && d.latency_ms && typeof d.latency_ms === 'object' ? d.latency_ms : null;
@@ -217,6 +248,7 @@ function rowStages(envIds, { from, to } = {}) {
         },
         editedBy: { $first: '$edited_by' },
         editedAt: { $first: '$edited_at' },
+        assignee: { $max: '$assigned_to' },
         version: { $first: '$annotation_version' },
         history: { $first: '$annotation_history' },
         mrps: { $push: '$mrp' },
@@ -247,7 +279,7 @@ function rowStages(envIds, { from, to } = {}) {
     { $addFields: { cur: { $mergeObjects: [{ $ifNull: ['$sr.predicted', {}] }, { $ifNull: ['$sr.edited_values', {}] }] } } },
     {
       $project: {
-        ts: 1, img: 1, version: 1, history: 1, images: 1,
+        ts: 1, img: 1, version: 1, history: 1, images: 1, assignee: 1,
         scan: IS_SCAN,
         noResult: { $and: [IS_SCAN, { $eq: [{ $type: '$sr' }, 'missing'] }] },
         // Scans: edited_by = dashboard user id (SDK edits leave it unset); time = updated_at once edited.
@@ -383,6 +415,8 @@ function toDto(r, names) {
     updatedAt: iso(r.editedAt)?.toISOString() ?? ts,
     updatedBy: editedBy ?? undefined,
     history: Array.isArray(r.history) ? r.history : [],
+    // Split team owner (name); old / unassigned captures → null.
+    assignedTo: r.assignee != null ? (names?.get(String(r.assignee)) ?? String(r.assignee)) : null,
     // New scans only: every best photo + fields it shows; noResult = no session_results yet (not editable).
     ...(images ? { images, noResult: !!r.noResult } : {}),
   }, r);
@@ -390,7 +424,7 @@ function toDto(r, names) {
 
 /** Rows → DTOs (resolves scan editor ids to names only when needed). */
 async function toDtos(rows) {
-  const names = rows.some((r) => r.scan && r.editedBy != null) ? await userNames() : null;
+  const names = rows.some((r) => (r.scan && r.editedBy != null) || r.assignee != null) ? await userNames() : null;
   return rows.map((r) => toDto(r, names));
 }
 
@@ -448,10 +482,11 @@ async function updateScan(id, latest, cur, metadata, user) {
   const sample = [pred.mfd, pred.exp, shown.mfd, shown.exp].map((v) => String(v ?? '')).find((v) => DMY_SEP.test(v)) ?? '';
   const sep = sample.match(DMY_SEP)?.[1] ?? '-';
   const text = {
-    batch: metadata.batchNumber,
-    mrp: mrpText(metadata.mrp, pred.mrp ?? shown.mrp),
-    mfd: dmyText(metadata.mfgDate, sep),
-    exp: dmyText(metadata.expiryDate, sep),
+    // Cleared field (not on photo) → "N/A", same as the scan engine writes.
+    batch: metadata.batchNumber || 'N/A',
+    mrp: metadata.mrp == null ? 'N/A' : mrpText(metadata.mrp, pred.mrp ?? shown.mrp),
+    mfd: metadata.mfgDate ? dmyText(metadata.mfgDate, sep) : 'N/A',
+    exp: metadata.expiryDate ? dmyText(metadata.expiryDate, sep) : 'N/A',
   };
   const changed = diffFields(cur.metadata, metadata);
   if (!changed.length) return cur;
@@ -574,7 +609,8 @@ export const mongoRepo = {
 
     /** Events this user may see (same client scope as lists). Throws 401 if account inactive. */
     async visibleTo(user, events) {
-      const { clientKeys } = await scope(user.id);
+      const { clientKeys, member, envSet } = await scope(user.id);
+      if (member) return events.filter((e) => envSet.has(e.env)); // split team: shared old + own
       if (!clientKeys) return events; // super admin
       return events.filter((e) => e.stores.some((k) => k.startsWith('client:') && clientKeys.has(k.slice(7))));
     },
@@ -805,9 +841,10 @@ export const mongoRepo = {
         { _id: latest._id, annotation_version: latest.annotation_version ?? null }, // optimistic lock
         {
           $set: {
-            mfg_date: new Date(`${metadata.mfgDate}T00:00:00Z`),
-            expiry_date: new Date(`${metadata.expiryDate}T00:00:00Z`),
-            batch_no: metadata.batchNumber,
+            // Blank field = not on photo → null.
+            mfg_date: metadata.mfgDate ? new Date(`${metadata.mfgDate}T00:00:00Z`) : null,
+            expiry_date: metadata.expiryDate ? new Date(`${metadata.expiryDate}T00:00:00Z`) : null,
+            batch_no: metadata.batchNumber || null,
             mrp: metadata.mrp,
             edited_by: user.name || user.email,
             edited_at: now,

@@ -10,7 +10,7 @@ export const PERMISSIONS = [
 export type Permission = (typeof PERMISSIONS)[number];
 
 export const PERMISSION_INFO: Record<Permission, { label: string; hint: string }> = {
-  view_documents: { label: 'Filter Table', hint: 'See the Filter Table list' },
+  view_documents: { label: 'Annotation Table', hint: 'See the Annotation Table list' },
   view_annotation: { label: 'Annotation', hint: 'See EAN → batch drill-down' },
   edit_capture: { label: 'Edit captures', hint: 'Change batch, MRP, MFD, expiry' },
   view_stats: { label: 'Edit Stats', hint: 'See accuracy / edit stats' },

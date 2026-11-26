@@ -218,14 +218,14 @@ const latencyHead = (k: (typeof LATENCY_KEYS)[number]) => (k === 'vlm' ? 'Model 
 
 export const detailLines = (rows: StatsRow[]): Cell[][] => [
   [
-    'Capture ID', 'Capture day', 'EAN',
+    'Request ID', 'Capture day', 'EAN',
     'Original batch', 'Final batch', 'Original MRP', 'Final MRP',
     'Original MFD', 'Final MFD', 'Original expiry', 'Final expiry',
     'Fields changed', 'Any change', 'Annotators', 'Last edited at',
     'Started at (IST)', 'Finished at (IST)', ...LATENCY_KEYS.map(latencyHead),
   ],
   ...rows.map((r) => [
-    r.id, r.captureDay, r.ean,
+    r.requestId ?? '', r.captureDay, r.ean,
     r.original.batchNumber, r.final.batchNumber, r.original.mrp, r.final.mrp,
     r.original.mfgDate, r.final.mfgDate, r.original.expiryDate, r.final.expiryDate,
     r.changed.map((k) => FIELD_LABELS[k]).join(' | '), r.changed.length ? 'Yes' : 'No',

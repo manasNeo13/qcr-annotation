@@ -89,6 +89,37 @@ router.put('/roles/:key', async (req, res) => {
 });
 router.delete('/roles/:key', async (req, res) => res.json(await admin.deleteRole(roleParam(req.params.key), by(req))));
 
+// ── Split team (repos/split.js) ──
+const split = admin ? await import('../repos/split.js') : null;
+const dayStr = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Use YYYY-MM-DD');
+const idStr = z.string().trim().min(1).max(40);
+router.get('/split', async (_req, res) => res.json(await split.overview()));
+router.put('/split/team', async (req, res) => {
+  const { members } = parse(z.object({ members: z.array(idStr).max(500) }).strict(), req.body ?? {});
+  res.json(await split.setTeam(members, by(req)));
+});
+router.post('/split/move', async (req, res) => {
+  const body = parse(
+    z
+      .object({ from: idStr, to: idStr, fromDay: dayStr, toDay: dayStr })
+      .strict()
+      .refine((v) => v.fromDay <= v.toDay, { path: ['toDay'], message: 'End day must be on/after start day' }),
+    req.body ?? {},
+  );
+  res.json(await split.move(body, by(req)));
+});
+
+router.post('/split/divide', async (req, res) => {
+  const body = parse(
+    z
+      .object({ fromDay: dayStr, toDay: dayStr, dry: z.boolean().default(false) })
+      .strict()
+      .refine((v) => v.fromDay <= v.toDay, { path: ['toDay'], message: 'End day must be on/after start day' }),
+    req.body ?? {},
+  );
+  res.json(await split.divideDays(body, by(req)));
+});
+
 router.get('/audit', async (req, res) => {
   const q = parse(z.object(PAGE), req.query);
   res.json({ ...(await admin.listAudit(q)), page: q.page, pageSize: q.pageSize });

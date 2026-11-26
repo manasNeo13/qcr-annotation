@@ -278,6 +278,14 @@ export const mockApi = {
     return { items: rows.slice(start, start + pageSize), total: rows.length, page, pageSize, counts };
   },
 
+  async idAt(n: number, filter: ListFilter): Promise<{ id: string; total: number }> {
+    const all = { page: 1, pageSize: 100000, ...filter };
+    const { items } = await (filter.changed ? this.listEdited(all) : this.listDocuments(all));
+    const doc = items[items.length - n];
+    if (!doc) throw new Error(`Enter a number from 1 to ${items.length}`);
+    return { id: doc.id, total: items.length };
+  },
+
   async getNeighbors(id: string, filter: ListFilter): Promise<Neighbors> {
     const all = { page: 1, pageSize: 100000, ...filter };
     const { items } = await (filter.changed ? this.listEdited(all) : this.listDocuments(all));

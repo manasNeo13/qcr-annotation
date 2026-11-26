@@ -18,7 +18,6 @@ import {
 import LogoutIcon from '@mui/icons-material/LogoutOutlined';
 import KeyIcon from '@mui/icons-material/KeyOutlined';
 import ListIcon from '@mui/icons-material/TableRowsOutlined';
-import LayersIcon from '@mui/icons-material/LayersOutlined';
 import StatsIcon from '@mui/icons-material/InsertChartOutlined';
 import UsersIcon from '@mui/icons-material/ManageAccountsOutlined';
 import { useAuth } from '../auth/AuthContext';
@@ -28,8 +27,8 @@ import { brandGrad, colors } from '../theme';
 import { clientLabel } from '../utils/clients';
 
 const NAV: { key: string; label: string; to: string; icon: ReactNode; perm: Permission }[] = [
-  { key: 'documents', label: 'Filter Table', to: '/documents', icon: <ListIcon fontSize="small" />, perm: 'view_documents' },
-  { key: 'annotation', label: 'Annotation', to: '/annotation', icon: <LayersIcon fontSize="small" />, perm: 'view_annotation' },
+  { key: 'documents', label: 'Annotation Table', to: '/documents', icon: <ListIcon fontSize="small" />, perm: 'view_documents' },
+  // Annotation (EAN → batch drill-down) hidden from the header for now (user decision 2026-11-26); route still works.
   { key: 'stats', label: 'Edit Stats', to: '/stats', icon: <StatsIcon fontSize="small" />, perm: 'view_stats' },
   { key: 'users', label: 'Users', to: '/users', icon: <UsersIcon fontSize="small" />, perm: 'manage_users' },
 ];
@@ -80,7 +79,8 @@ export default function AppLayout() {
   const { user, logout } = useAuth();
   const { me } = useAccess();
   // Non-NHQ users see only their assigned clients.
-  const myClients = me && !me.superAdmin ? me.clients : null;
+  // Split team members see every client's old captures → no client notice.
+  const myClients = me && !me.superAdmin && !me.splitTeam ? me.clients : null;
   const noClient = !!myClients && myClients.length === 0;
   const navigate = useNavigate();
   const qc = useQueryClient();

@@ -60,6 +60,9 @@ app.use((err, req, res, next) => {
 });
 
 await repo.init();
+// Split team assigner: always on (new captures divided even when nobody has the site open).
+const split = env.DATA_SOURCE === 'mongo' ? await import('./repos/split.js') : null;
+await split?.startAssigner();
 if (!sasConfigured) console.warn('[sas] Azure not configured — image refs returned unsigned');
 
 const server = app.listen(env.PORT, '0.0.0.0', () => console.log(`API listening on :${env.PORT}`));
@@ -67,6 +70,7 @@ const server = app.listen(env.PORT, '0.0.0.0', () => console.log(`API listening 
 const shutdown = async (sig) => {
   console.log(`${sig} — shutting down`);
   closeLive();
+  split?.stopAssigner();
   server.close();
   await repo.close();
   process.exit(0);

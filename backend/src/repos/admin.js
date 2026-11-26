@@ -59,8 +59,8 @@ function clearCaches(userId) {
 export async function permissionsFor(userId) {
   let u = userCache.get(userId);
   if (!u || Date.now() - u.at > TTL_MS) {
-    const doc = await users().findOne({ id: userId }, { projection: { role: 1, status: 1, clients: 1 } });
-    u = { at: Date.now(), role: doc?.role ?? '', active: !!doc && doc.status !== false, clients: clientsOf(doc) };
+    const doc = await users().findOne({ id: userId }, { projection: { role: 1, status: 1, clients: 1, split_team: 1 } });
+    u = { at: Date.now(), role: doc?.role ?? '', active: !!doc && doc.status !== false, clients: clientsOf(doc), split: doc?.split_team === true };
     userCache.set(userId, u);
   }
   if (!u.active) throw new HttpError(401, 'Account not active');
@@ -72,6 +72,8 @@ export async function permissionsFor(userId) {
     permissions: permsOf(key, doc),
     superAdmin: isSuperAdmin(key),
     clients: u.clients,
+    // Split team member: sees old captures of every client + own new ones.
+    splitTeam: !isSuperAdmin(key) && u.split,
   };
 }
 

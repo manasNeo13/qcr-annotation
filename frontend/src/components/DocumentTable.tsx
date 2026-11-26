@@ -88,6 +88,8 @@ export default function DocumentTable({
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
   const items = data?.items ?? [];
+  // No. 1 = oldest in this list → a capture keeps its number when new ones arrive on top.
+  const serial = (i: number) => ((data?.total ?? 0) - ((page - 1) * pageSize + i)).toLocaleString();
   const onRowKey = (e: React.KeyboardEvent, id: string) => {
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
@@ -204,7 +206,8 @@ export default function DocumentTable({
           <Table sx={{ minWidth: 860 }} aria-label="Documents">
             <TableHead>
               <TableRow>
-                <TableCell sx={{ pl: 3 }}>Document</TableCell>
+                <TableCell sx={{ pl: 3, width: 72 }}>No.</TableCell>
+                <TableCell>Document</TableCell>
                 <TableCell>Batch no.</TableCell>
                 <TableCell>MFG date</TableCell>
                 <TableCell>Expiry date</TableCell>
@@ -221,14 +224,14 @@ export default function DocumentTable({
                       <TableCell sx={{ pl: 3 }}>
                         <Skeleton width={180} />
                       </TableCell>
-                      {Array.from({ length: 7 }).map((__, j) => (
-                        <TableCell key={j} sx={j === 5 ? { display: { md: 'none', lg: 'table-cell' } } : undefined}>
+                      {Array.from({ length: 8 }).map((__, j) => (
+                        <TableCell key={j} sx={j === 6 ? { display: { md: 'none', lg: 'table-cell' } } : undefined}>
                           <Skeleton />
                         </TableCell>
                       ))}
                     </TableRow>
                   ))
-                : items.map((doc) => (
+                : items.map((doc, i) => (
                     <TableRow
                       key={doc.id}
                       className={highlight?.has(doc.id) ? 'nq-new-row' : undefined}
@@ -240,8 +243,16 @@ export default function DocumentTable({
                       onKeyDown={(e) => onRowKey(e, doc.id)}
                       sx={{ cursor: 'pointer', '&:last-child td': { borderBottom: 0 } }}
                     >
-                      <TableCell sx={{ pl: 3, fontWeight: 600, color: colors.textDark, whiteSpace: 'nowrap' }}>
+                      <TableCell sx={{ pl: 3, color: colors.muted, fontSize: 13, fontWeight: 600, whiteSpace: 'nowrap' }}>
+                        {serial(i)}
+                      </TableCell>
+                      <TableCell sx={{ fontWeight: 600, color: colors.textDark, whiteSpace: 'nowrap' }}>
                         {doc.productName}
+                        {doc.assignedTo && (
+                          <Box component="span" sx={{ display: 'block', fontSize: 11, fontWeight: 500, color: colors.muted }}>
+                            Assigned: {doc.assignedTo}
+                          </Box>
+                        )}
                       </TableCell>
                       <TableCell sx={{ fontFamily: 'ui-monospace, monospace', fontSize: 13 }}>
                         <Val doc={doc} field="batch" show={showEdits} />

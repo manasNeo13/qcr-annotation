@@ -4,27 +4,25 @@ import { z } from 'zod';
 const ISO = /^\d{4}-\d{2}-\d{2}$/;
 const isDate = (v: string) => ISO.test(v) && dayjs(v).isValid();
 
+// Every field optional: photo may not show it → leave blank.
 export const metadataSchema = z
   .object({
     mfgDate: z
       .string()
-      .min(1, 'Manufacturing date is required')
-      .refine(isDate, 'Enter a valid date')
-      .refine((v) => !dayjs(v).isAfter(dayjs(), 'day'), 'Cannot be in the future'),
-    expiryDate: z.string().min(1, 'Expiry date is required').refine(isDate, 'Enter a valid date'),
+      .refine((v) => !v || isDate(v), 'Enter a valid date')
+      .refine((v) => !v || !dayjs(v).isAfter(dayjs(), 'day'), 'Cannot be in the future'),
+    expiryDate: z.string().refine((v) => !v || isDate(v), 'Enter a valid date'),
     batchNumber: z
       .string()
       .trim()
-      .min(1, 'Batch number is required')
       .max(30, 'Max 30 characters')
-      .regex(/^[A-Za-z0-9 .\-/]+$/, 'Letters, numbers, space, . - / only'),
+      .regex(/^[A-Za-z0-9 .\-/]*$/, 'Letters, numbers, space, . - / only'),
     mrp: z
       .string()
       .trim()
-      .min(1, 'MRP is required')
-      .regex(/^\d+(\.\d{1,2})?$/, 'Enter a valid amount (max 2 decimals)')
-      .refine((v) => Number(v) > 0, 'Must be greater than 0')
-      .refine((v) => Number(v) <= 1_000_000, 'Amount too large'),
+      .refine((v) => !v || /^\d+(\.\d{1,2})?$/.test(v), 'Enter a valid amount (max 2 decimals)')
+      .refine((v) => !v || Number(v) > 0, 'Must be greater than 0')
+      .refine((v) => !v || Number(v) <= 1_000_000, 'Amount too large'),
   })
   .refine(
     (d) => !isDate(d.mfgDate) || !isDate(d.expiryDate) || dayjs(d.expiryDate).isAfter(dayjs(d.mfgDate), 'day'),

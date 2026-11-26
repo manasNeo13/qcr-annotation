@@ -11,8 +11,12 @@
  *   PUT    /admin/roles/:key { permissions }        → RoleInfo   (key '' = "~none")
  *   DELETE /admin/roles/:key                        → { moved } (users → No role)
  *   GET    /admin/audit   ?page                     → Paged<AuditEntry>
+ *   GET    /admin/split                             → SplitOverview
+ *   PUT    /admin/split/team { members }            → SplitOverview
+ *   POST   /admin/split/divide { fromDay,toDay,dry } → SplitDivideResult (dry = preview)
+ *   POST   /admin/split/move { from,to,fromDay,toDay } → SplitOverview + { moved }
  */
-import type { AdminUser, AdminUserInput, AuditEntry, Paged, RoleInfo, StoreOption } from '../types';
+import type { AdminUser, AdminUserInput, AuditEntry, Paged, RoleInfo, SplitDivideResult, SplitOverview, StoreOption } from '../types';
 import type { Permission } from '../utils/permissions';
 import { request } from './client';
 
@@ -52,5 +56,11 @@ export const adminApi = {
   updateRole: (key: string, permissions: Permission[]) =>
     request<RoleInfo>(`/admin/roles/${roleSeg(key)}`, json('PUT', { permissions })),
   deleteRole: (key: string) => request<{ moved: number }>(`/admin/roles/${roleSeg(key)}`, { method: 'DELETE' }),
+  split: () => request<SplitOverview>('/admin/split'),
+  setSplitTeam: (members: string[]) => request<SplitOverview>('/admin/split/team', json('PUT', { members })),
+  moveSplit: (body: { from: string; to: string; fromDay: string; toDay: string }) =>
+    request<SplitOverview & { moved: number }>('/admin/split/move', json('POST', body)),
+  divideSplit: (body: { fromDay: string; toDay: string; dry: boolean }) =>
+    request<SplitDivideResult>('/admin/split/divide', json('POST', body)),
   audit: (page: number, pageSize: number) => request<Paged<AuditEntry>>(`/admin/audit?page=${page}&pageSize=${pageSize}`),
 };

@@ -9,6 +9,7 @@ export const ADMIN_KEYS = {
   stores: ['admin', 'stores'] as const,
   clients: ['admin', 'clients'] as const,
   audit: ['admin', 'audit'] as const,
+  split: ['admin', 'split'] as const,
 };
 
 /** Role key → info lookup. */

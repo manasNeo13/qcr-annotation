@@ -38,6 +38,8 @@ export interface DocumentItem {
   images?: ScanImage[];
   /** New scan with no saved result yet → no values, not editable. */
   noResult?: boolean;
+  /** Split team: who this capture is assigned to (name). null = shared (old capture). */
+  assignedTo?: string | null;
 }
 
 export interface ScanImage {
@@ -176,6 +178,8 @@ export interface StatsRow {
   saves: number;
   lastEditedAt: string | null;
   /** New scans only (latest recapture); old captures → null/missing. */
+  requestId?: string | null;
+  assignedTo?: string | null;
   startedAt?: string | null;
   finishedAt?: string | null;
   latencyMs?: Partial<Record<LatencyKey, number>> | null;
@@ -207,6 +211,8 @@ export interface Me extends User {
   superAdmin: boolean;
   /** Assigned clients (others see only these). */
   clients: string[];
+  /** Split team member: old captures of every client + captures assigned to them. */
+  splitTeam?: boolean;
   mustChangePassword?: boolean;
 }
 
@@ -259,8 +265,11 @@ export interface AuditEntry {
   id: string;
   at: string | null;
   by: { id: string; name: string };
-  action: 'user.create' | 'user.update' | 'user.delete' | 'user.password' | 'role.create' | 'role.update' | 'role.delete';
-  target: { type: 'user' | 'role'; id: string; name: string };
+  action:
+    | 'user.create' | 'user.update' | 'user.delete' | 'user.password'
+    | 'role.create' | 'role.update' | 'role.delete'
+    | 'split.add' | 'split.remove' | 'split.move' | 'split.divide';
+  target: { type: 'user' | 'role' | 'split'; id: string; name: string };
   changes: Record<string, { from: unknown; to: unknown }>;
 }
 
@@ -269,4 +278,29 @@ export interface Paged<T> {
   total: number;
   page: number;
   pageSize: number;
+}
+
+// ── Split team (NHQ) ─────────────────────────────────────────────────────
+export interface SplitMember {
+  id: string;
+  name: string;
+  email: string;
+  active: boolean;
+  joinedAt: string | null;
+  /** Captures assigned today (IST) / in total. */
+  today: number;
+  total: number;
+}
+export interface SplitOverview {
+  /** When dividing started (first member joined). null = no team yet. */
+  startedAt: string | null;
+  today: string;
+  members: SplitMember[];
+  candidates: { id: string; name: string; email: string }[];
+}
+export interface SplitDivideResult {
+  captures: number;
+  days: { day: string; captures: number }[];
+  perMember: { id: string; captures: number }[];
+  done: boolean;
 }

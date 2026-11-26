@@ -5,25 +5,30 @@ const ISO = /^\d{4}-\d{2}-\d{2}$/;
 const isDate = (v) => ISO.test(v) && !Number.isNaN(Date.parse(`${v}T00:00:00Z`)) && toISODate(new Date(`${v}T00:00:00Z`)) === v;
 
 // Mirrors frontend utils/validation.ts (MRP arrives as number here).
+// Every field optional: photo may not show it → '' (dates/batch) or null (MRP) = "not on image".
+const blank = (schema) => z.union([z.literal(''), schema]);
 export const metadataSchema = z
   .object({
-    mfgDate: z.string().refine(isDate, 'Enter a valid date').refine((v) => v <= todayISO(), 'Cannot be in the future'),
-    expiryDate: z.string().refine(isDate, 'Enter a valid date'),
+    mfgDate: blank(z.string().refine(isDate, 'Enter a valid date').refine((v) => v <= todayISO(), 'Cannot be in the future')),
+    expiryDate: blank(z.string().refine(isDate, 'Enter a valid date')),
     batchNumber: z
       .string()
       .trim()
-      .min(1, 'Batch number is required')
       .max(30, 'Max 30 characters')
-      .regex(/^[A-Za-z0-9 .\-/]+$/, 'Letters, numbers, space, . - / only')
+      .regex(/^[A-Za-z0-9 .\-/]*$/, 'Letters, numbers, space, . - / only')
       .transform((v) => v.toUpperCase()),
     mrp: z
       .number()
       .positive('Must be greater than 0')
       .max(1_000_000, 'Amount too large')
-      .refine((v) => Math.abs(v * 100 - Math.round(v * 100)) < 1e-6, 'Max 2 decimals'),
+      .refine((v) => Math.abs(v * 100 - Math.round(v * 100)) < 1e-6, 'Max 2 decimals')
+      .nullable(),
   })
   .strict()
-  .refine((d) => d.expiryDate > d.mfgDate, { path: ['expiryDate'], message: 'Expiry must be after manufacturing date' });
+  .refine((d) => !d.mfgDate || !d.expiryDate || d.expiryDate > d.mfgDate, {
+    path: ['expiryDate'],
+    message: 'Expiry must be after manufacturing date',
+  });
 
 export const updateBodySchema = z.object({ metadata: metadataSchema }).strict();
 

@@ -92,6 +92,10 @@ const real = {
   getNeighbors: (id: string, filter: ListFilter) =>
     request<Neighbors>(`/documents/${encodeURIComponent(id)}/neighbors?${filterQs(filter)}`),
 
+  /** Serial number (1 = oldest in filter) → capture id. */
+  idAt: (n: number, filter: ListFilter) =>
+    request<{ id: string; total: number }>(`/documents/at?n=${n}&${filterQs(filter)}`),
+
   getDocument: (id: string) => request<DocumentItem>(`/documents/${encodeURIComponent(id)}`),
 
   // Backend derives editor from the JWT; extra arg kept for mock parity.

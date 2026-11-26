@@ -140,10 +140,10 @@ function ScopeButton({ scope }: { scope: ReturnType<typeof useScope> }) {
   );
 }
 
-/** Client filter — NHQ (super admin) only; renders nothing for everyone else. */
+/** Client filter — NHQ + split team members (they see every client); nothing for everyone else. */
 export function ScopeFilters({ state }: { state: ListState }) {
   const { me } = useAccess();
-  if (!me?.superAdmin) return null;
+  if (!me?.superAdmin && !me?.splitTeam) return null;
   return <ScopeFiltersInner state={state} />;
 }
 
@@ -171,7 +171,7 @@ export default function ListToolbar({ state, counts, searchPlaceholder, showScop
   const { filter, latest, search, setSearch, update, setRange } = state;
   const status = filter.status ?? 'all';
   const { me } = useAccess();
-  const scopeOn = showScope && !!me?.superAdmin;
+  const scopeOn = showScope && !!(me?.superAdmin || me?.splitTeam);
 
   return (
     <Box

@@ -142,6 +142,7 @@ export function computeEditStats(docs, { detail = false } = {}) {
         editors: [...byEditor.keys()],
         saves: list.length,
         lastEditedAt: list.length ? d.updatedAt : null,
+        assignedTo: d.assignedTo ?? null,
       });
     }
   }

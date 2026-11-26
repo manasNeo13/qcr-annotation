@@ -1,5 +1,5 @@
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { useForm } from 'react-hook-form';
 import { Box, InputAdornment, TextField } from '@mui/material';
 import type { DocMetadata } from '../types';
@@ -11,19 +11,26 @@ interface Props {
   disabled?: boolean;
   onSubmit: (values: DocMetadata) => void;
   onDirtyChange?: (dirty: boolean) => void;
+  /** One row of 4 (full-screen bar). */
+  compact?: boolean;
+  /** Unsaved values to restore on mount (form moved between page and full screen). */
+  draft?: MetadataFormValues | null;
+  onDraftChange?: (values: MetadataFormValues | null) => void;
 }
 
 const toForm = (m: DocMetadata): MetadataFormValues => ({
-  mfgDate: m.mfgDate,
-  expiryDate: m.expiryDate,
-  batchNumber: m.batchNumber,
+  mfgDate: m.mfgDate ?? '',
+  expiryDate: m.expiryDate ?? '',
+  batchNumber: m.batchNumber ?? '',
   mrp: m.mrp == null ? '' : String(m.mrp),
 });
 
-export default function MetadataForm({ formId, initial, disabled, onSubmit, onDirtyChange }: Props) {
+export default function MetadataForm({ formId, initial, disabled, onSubmit, onDirtyChange, compact, draft, onDraftChange }: Props) {
   const {
     register,
     handleSubmit,
+    setValue,
+    watch,
     formState: { errors, isDirty },
   } = useForm<MetadataFormValues>({
     resolver: zodResolver(metadataSchema),
@@ -33,12 +40,26 @@ export default function MetadataForm({ formId, initial, disabled, onSubmit, onDi
 
   useEffect(() => onDirtyChange?.(isDirty), [isDirty, onDirtyChange]);
 
+  // Restore unsaved values once on mount (draft from the other place this form was shown).
+  const restored = useRef(false);
+  useEffect(() => {
+    if (restored.current || !draft) return;
+    restored.current = true;
+    for (const k of Object.keys(draft) as (keyof MetadataFormValues)[]) setValue(k, draft[k], { shouldDirty: true });
+  }, [draft, setValue]);
+  // Report current values → page keeps them as draft.
+  useEffect(() => {
+    if (!onDraftChange) return;
+    const sub = watch((v) => onDraftChange(v as MetadataFormValues));
+    return () => sub.unsubscribe();
+  }, [watch, onDraftChange]);
+
   const submit = (v: MetadataFormValues) =>
     onSubmit({
       mfgDate: v.mfgDate,
       expiryDate: v.expiryDate,
       batchNumber: v.batchNumber.trim().toUpperCase(),
-      mrp: Math.round(Number(v.mrp) * 100) / 100,
+      mrp: v.mrp.trim() ? Math.round(Number(v.mrp) * 100) / 100 : null,
     });
 
   const field = (name: keyof MetadataFormValues) => ({
@@ -55,7 +76,12 @@ export default function MetadataForm({ formId, initial, disabled, onSubmit, onDi
       id={formId}
       noValidate
       onSubmit={handleSubmit(submit)}
-      sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' }, columnGap: 2, rowGap: 0.5 }}
+      sx={{
+        display: 'grid',
+        gridTemplateColumns: compact ? { xs: '1fr 1fr', md: 'repeat(4, minmax(0, 1fr))' } : { xs: '1fr', sm: '1fr 1fr' },
+        columnGap: 2,
+        rowGap: 0.5,
+      }}
     >
       <TextField
         label="Manufacturing date"
