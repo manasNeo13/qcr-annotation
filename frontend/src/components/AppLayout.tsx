@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useRef, useState, type ReactNode } from 'react';
 import { Link as RouterLink, Outlet, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
 import {
@@ -8,11 +8,14 @@ import {
   Box,
   Button,
   ButtonBase,
+  CircularProgress,
   Divider,
   ListItemIcon,
   Menu,
   MenuItem,
+  Snackbar,
   Toolbar,
+  Tooltip,
   Typography,
 } from '@mui/material';
 import LogoutIcon from '@mui/icons-material/LogoutOutlined';
@@ -20,8 +23,10 @@ import KeyIcon from '@mui/icons-material/KeyOutlined';
 import ListIcon from '@mui/icons-material/TableRowsOutlined';
 import StatsIcon from '@mui/icons-material/InsertChartOutlined';
 import UsersIcon from '@mui/icons-material/ManageAccountsOutlined';
+import UploadFileIcon from '@mui/icons-material/UploadFileOutlined';
 import { useAuth } from '../auth/AuthContext';
 import { useAccess } from '../auth/useAccess';
+import { api } from '../api';
 import type { Permission } from '../utils/permissions';
 import { brandGrad, colors } from '../theme';
 import { clientLabel } from '../utils/clients';
@@ -75,9 +80,11 @@ function NavTabs() {
   );
 }
 
+type SnackState = { open: boolean; severity: 'success' | 'error'; message: string };
+
 export default function AppLayout() {
   const { user, logout } = useAuth();
-  const { me } = useAccess();
+  const { me, can } = useAccess();
   // Non-NHQ users see only their assigned clients.
   // Split team members see every client's old captures → no client notice.
   const myClients = me && !me.superAdmin && !me.splitTeam ? me.clients : null;
@@ -98,6 +105,37 @@ export default function AppLayout() {
     .slice(0, 2)
     .join('')
     .toUpperCase();
+
+  // ── Upload GRN revalidation data ──────────────────────────────────────────
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [uploading, setUploading] = useState(false);
+  const [snack, setSnack] = useState<SnackState>({ open: false, severity: 'success', message: '' });
+
+  const handleUploadClick = () => fileInputRef.current?.click();
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    // Reset so the same file can be re-selected if needed
+    e.target.value = '';
+    setUploading(true);
+    try {
+      const result = await api.uploadClientRevalidateData(file);
+      setSnack({
+        open: true,
+        severity: 'success',
+        message: `${result.message} — ${result.inserted} inserted, ${result.updated} updated`,
+      });
+    } catch (err) {
+      setSnack({
+        open: true,
+        severity: 'error',
+        message: err instanceof Error ? err.message : 'Upload failed',
+      });
+    } finally {
+      setUploading(false);
+    }
+  };
 
   return (
     <Box sx={{ minHeight: '100dvh', display: 'flex', flexDirection: 'column' }}>
@@ -138,22 +176,82 @@ export default function AppLayout() {
 
           <NavTabs />
 
-          <ButtonBase
-            onClick={(e) => setAnchor(e.currentTarget)}
-            aria-label="Account menu"
-            aria-haspopup="menu"
-            sx={{ justifySelf: 'end', maxWidth: '100%', minWidth: 0, borderRadius: 999, p: 0.5, pr: { xs: 0.5, sm: 1.5 }, gap: 1, '&:hover': { bgcolor: colors.background } }}
-          >
-            <Avatar sx={{ width: 34, height: 34, fontSize: 14, fontWeight: 700, background: brandGrad }}>{initials}</Avatar>
-            <Box sx={{ display: { xs: 'none', md: 'block' }, textAlign: 'left', lineHeight: 1.2, minWidth: 0, overflow: 'hidden' }}>
-              <Typography sx={{ fontSize: 14, fontWeight: 600, color: colors.textDark, lineHeight: 1.2 }}>
-                {user?.name}
-              </Typography>
-              <Typography sx={{ fontSize: 12, color: colors.muted, lineHeight: 1.2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {myClients && myClients.length > 0 ? myClients.map(clientLabel).join(', ') : user?.email}
-              </Typography>
-            </Box>
-          </ButtonBase>
+          {/* Right column: upload + account */}
+          <Box sx={{ justifySelf: 'end', display: 'flex', alignItems: 'center', gap: 0.5, minWidth: 0 }}>
+            {can('edit_capture') && (
+              <>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".xlsx,.xls"
+                  hidden
+                  onChange={handleFileChange}
+                />
+                <Tooltip title="Upload GRN revalidation data (.xlsx)" disableHoverListener={uploading}>
+                  <span>
+                    <Button
+                      onClick={handleUploadClick}
+                      disabled={uploading}
+                      size="small"
+                      startIcon={
+                        uploading
+                          ? <CircularProgress size={14} thickness={5} sx={{ color: colors.brandDark }} />
+                          : <UploadFileIcon sx={{ fontSize: '16px !important' }} />
+                      }
+                      aria-label="Upload GRN revalidation data"
+                      sx={{
+                        px: 1.5,
+                        py: 0.6,
+                        minHeight: 0,
+                        minWidth: 0,
+                        borderRadius: '20px',
+                        fontSize: 13,
+                        fontWeight: 700,
+                        color: colors.brandDark,
+                        bgcolor: colors.brandSoft,
+                        border: `1.5px solid ${colors.brand100}`,
+                        boxShadow: 'none',
+                        '& .MuiButton-startIcon': { mr: { xs: 0, sm: 0.5 } },
+                        '&:hover': {
+                          bgcolor: '#d1fae5',
+                          border: `1.5px solid ${colors.primary}`,
+                          boxShadow: '0 2px 8px rgba(0,172,105,.18)',
+                        },
+                        '&.Mui-disabled': {
+                          bgcolor: colors.brandSoft,
+                          border: `1.5px solid ${colors.brand100}`,
+                          color: colors.primary,
+                          opacity: 0.7,
+                        },
+                        transition: 'all .18s',
+                      }}
+                    >
+                      <Box component="span" sx={{ display: { xs: 'none', sm: 'inline' } }}>
+                        {uploading ? 'Uploading…' : 'Upload GRN'}
+                      </Box>
+                    </Button>
+                  </span>
+                </Tooltip>
+              </>
+            )}
+
+            <ButtonBase
+              onClick={(e) => setAnchor(e.currentTarget)}
+              aria-label="Account menu"
+              aria-haspopup="menu"
+              sx={{ maxWidth: '100%', minWidth: 0, borderRadius: 999, p: 0.5, pr: { xs: 0.5, sm: 1.5 }, gap: 1, '&:hover': { bgcolor: colors.background } }}
+            >
+              <Avatar sx={{ width: 34, height: 34, fontSize: 14, fontWeight: 700, background: brandGrad }}>{initials}</Avatar>
+              <Box sx={{ display: { xs: 'none', md: 'block' }, textAlign: 'left', lineHeight: 1.2, minWidth: 0, overflow: 'hidden' }}>
+                <Typography sx={{ fontSize: 14, fontWeight: 600, color: colors.textDark, lineHeight: 1.2 }}>
+                  {user?.name}
+                </Typography>
+                <Typography sx={{ fontSize: 12, color: colors.muted, lineHeight: 1.2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                  {myClients && myClients.length > 0 ? myClients.map(clientLabel).join(', ') : user?.email}
+                </Typography>
+              </Box>
+            </ButtonBase>
+          </Box>
           <Menu
             anchorEl={anchor}
             open={!!anchor}
@@ -202,6 +300,21 @@ export default function AppLayout() {
           <Outlet />
         )}
       </Box>
+
+      <Snackbar
+        open={snack.open}
+        autoHideDuration={6000}
+        onClose={() => setSnack((s) => ({ ...s, open: false }))}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert
+          severity={snack.severity}
+          onClose={() => setSnack((s) => ({ ...s, open: false }))}
+          sx={{ width: '100%' }}
+        >
+          {snack.message}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 }

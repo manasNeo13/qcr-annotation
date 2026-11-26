@@ -30,8 +30,9 @@ import type {
   LoginResponse,
   Neighbors,
   StatsFilter,
+  UploadResult,
 } from '../types';
-import { request, USE_MOCK } from './client';
+import { request, uploadRequest, USE_MOCK } from './client';
 import { mockApi } from './mock';
 
 function filterQs({ status, ...rest }: ListFilter) {
@@ -104,6 +105,12 @@ const real = {
       method: 'PATCH',
       body: JSON.stringify({ metadata }),
     }),
+
+  uploadClientRevalidateData: (file: File) => {
+    const form = new FormData();
+    form.append('file', file);
+    return uploadRequest<UploadResult>('/upload_client_revalidate_data', form);
+  },
 };
 
 export const api = USE_MOCK ? mockApi : real;

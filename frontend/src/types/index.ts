@@ -1,5 +1,12 @@
 import type { Permission } from '../utils/permissions';
 
+export interface UploadResult {
+  message: string;
+  inserted: number;
+  updated: number;
+  skipped: number;
+}
+
 export type DocStatus = 'ok' | 'near_expiry' | 'expired';
 export type StatusFilter = DocStatus | 'all';
 

@@ -41,6 +41,33 @@ export function getToken(): string | null {
   }
 }
 
+/** Multipart file upload — skips JSON Content-Type so the browser sets the multipart boundary. */
+export async function uploadRequest<T>(path: string, body: FormData): Promise<T> {
+  const token = getToken();
+  const headers = new Headers();
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+
+  const res = await fetch(`${API_URL}${path}`, { method: 'POST', body, headers });
+
+  if (res.status === 401) window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+  const renewed = res.headers.get(RENEW_HEADER);
+  if (renewed && token) {
+    try {
+      const raw = authStore.get();
+      if (raw) authStore.set(JSON.stringify({ ...JSON.parse(raw), token: renewed }));
+    } catch { /* keep old token */ }
+  }
+  if (!res.ok) {
+    let message = `Request failed (${res.status})`;
+    try {
+      const b = await res.json();
+      message = b.message || b.error || message;
+    } catch { /* non-JSON error */ }
+    throw new ApiError(message, res.status);
+  }
+  return res.json() as Promise<T>;
+}
+
 export async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const token = getToken();
   const headers = new Headers(init.headers);
