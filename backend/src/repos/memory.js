@@ -168,4 +168,11 @@ export const memoryRepo = {
       return toDto(d);
     },
   },
+
+  clientMetadata: {
+    async upsertMany(records) {
+      // In-memory stub — not persisted across restarts
+      return { inserted: records.length, updated: 0 };
+    },
+  },
 };

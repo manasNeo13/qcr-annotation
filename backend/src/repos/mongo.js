@@ -477,6 +477,7 @@ export const mongoRepo = {
     db = client.db();
     await db.command({ ping: 1 });
     console.log(`[repo] mongo — db "${db.databaseName}"`);
+    await col('client_submited_metadata').createIndex({ request_id: 1 }, { unique: true });
   },
   async close() {
     await client?.close();
@@ -826,6 +827,32 @@ export const mongoRepo = {
       );
       if (!updated) throw new HttpError(409, 'Capture changed meanwhile — reload and retry');
       return getRow(id);
+    },
+  },
+
+  clientMetadata: {
+    /**
+     * Upsert rows from the "OCR vs GRN" Excel sheet into client_submited_metadata.
+     * Uses request_id as the unique key — re-uploading the same file is idempotent.
+     */
+    async upsertMany(records) {
+      const now = new Date();
+      const ops = records.map((r) => ({
+        updateOne: {
+          filter: { request_id: r.request_id },
+          update: {
+            $set: { ...r, updated_at: now },
+            $setOnInsert: { created_at: now },
+          },
+          upsert: true,
+        },
+      }));
+
+      const result = await col('client_submited_metadata').bulkWrite(ops, { ordered: false });
+      return {
+        inserted: result.upsertedCount,
+        updated: result.modifiedCount,
+      };
     },
   },
 };

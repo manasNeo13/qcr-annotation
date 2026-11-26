@@ -22,6 +22,7 @@ import type {
   Neighbors,
   StatsFilter,
   StatusFilter,
+  UploadResult,
 } from '../types';
 import { NONE_KEY } from '../types';
 import { computeEditStats, editMatch } from '../utils/editStats';
@@ -323,5 +324,10 @@ export const mockApi = {
     docs[idx] = next;
     save(docs);
     return withImage(next);
+  },
+
+  async uploadClientRevalidateData(_file: File): Promise<UploadResult> {
+    await delay(800);
+    return { message: 'Mock: 0 rows processed', inserted: 0, updated: 0, skipped: 0 };
   },
 };
