@@ -178,7 +178,7 @@ const firstNonNull = (arr) => ({ $arrayElemAt: [{ $filter: { input: arr, cond: {
 const toDate = (x) => ({ $convert: { input: x, to: 'date', onError: null, onNull: null } });
 
 /** metadata docs → one row per env_id, with status. */
-const RAW_FIELDS = ['env_id', 'timestamp', 'started_at', 'img_url', 'best_images', 'mrp', 'mfg_date', 'expiry_date', 'batch_no', 'ean', 'edited_by', 'edited_at', 'annotation_version', 'annotation_history'];
+const RAW_FIELDS = ['env_id', 'timestamp', 'started_at', 'is_recapture', 'img_url', 'best_images', 'mrp', 'mfg_date', 'expiry_date', 'batch_no', 'ean', 'edited_by', 'edited_at', 'annotation_version', 'annotation_history'];
 
 // ── New scans: text values from session_results ("01-07-2026", "01/11/2024", "N/A") ──
 /** "", "N/A", "NA", "null", "none" → null. */
@@ -241,10 +241,21 @@ function rowStages(envIds, { from, to } = {}) {
         _id: '$env_id',
         ts: { $first: '$timestamp' },
         img: { $first: '$img_url' },
-        // New scans (no timestamp): latest recapture by started_at via $max — NOT the sort
-        // (Cosmos ignores the 2nd sort key on ties → $first picked a random recapture).
+        // New scans: prefer is_recapture=true first, then latest started_at.
+        // $max on the object compares fields in order: recapture (1 > 0) wins, then t (ISO date).
         latestScan: {
-          $max: { $cond: [{ $ifNull: ['$started_at', false] }, { t: '$started_at', id: '$_id', imgs: '$best_images' }, null] },
+          $max: {
+            $cond: [
+              { $ifNull: ['$started_at', false] },
+              {
+                recapture: { $cond: [{ $ifNull: ['$is_recapture', false] }, 1, 0] },
+                t: '$started_at',
+                id: '$_id',
+                imgs: '$best_images',
+              },
+              null,
+            ],
+          },
         },
         editedBy: { $first: '$edited_by' },
         editedAt: { $first: '$edited_at' },
@@ -904,12 +915,12 @@ export const mongoRepo = {
       const metadataDocs = await col('metadata')
         .find(
           { request_id: { $in: requestIds }, started_at: { $exists: true } },
-          { projection: { _id: 1, request_id: 1, started_at: 1 } },
+          { projection: { _id: 1, request_id: 1, started_at: 1, is_recapture: 1 } },
         )
-        .sort({ started_at: -1 })
+        .sort({ is_recapture: -1, started_at: -1 }) // recapture wins; latest wins among ties
         .toArray();
 
-      // Keep only the latest _id per request_id (array is already newest-first).
+      // Keep the first (highest-priority) _id per request_id.
       const latestMetaId = new Map();
       for (const doc of metadataDocs) {
         const reqId = String(doc.request_id);
