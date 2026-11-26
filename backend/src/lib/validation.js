@@ -73,6 +73,8 @@ const listBase = z.object({
   // Drill-down. NONE_KEY = missing value.
   ean: z.string().trim().max(100).optional(),
   batch: z.string().trim().max(100).optional(),
+  // GRN filter: show only captures with client-submitted changed data.
+  grnEdited: z.string().optional().transform((v) => v === 'true' || v === '1'),
 });
 export const listQuerySchema = withRange(listBase);
 

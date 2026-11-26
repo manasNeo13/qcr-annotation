@@ -295,6 +295,8 @@ function rowStages(envIds, { from, to } = {}) {
         pMfg: { $cond: [IS_SCAN, dmyDate(textOrNull('$sr.predicted.mfd')), toDate(firstNonNull('$pMfgs'))] },
         pExp: { $cond: [IS_SCAN, dmyDate(textOrNull('$sr.predicted.exp')), toDate(firstNonNull('$pExps'))] },
         pBatch: { $cond: [IS_SCAN, textOrNull('$sr.predicted.batch'), firstNonNull('$pBatches')] },
+        grnEdited: { $ifNull: ['$sr.grn.edited', false] },
+        grnRaw: { $ifNull: ['$sr.grn', null] },
       },
     },
     {
@@ -345,7 +347,12 @@ const keyOf = (field) => ({ $cond: [{ $eq: [{ $ifNull: [field, ''] }, ''] }, NON
 async function filteredRows(f, user) {
   const envIds = await scopedEnvIds(user.id, f);
   if (!envIds.length) return null;
-  return [...rowStages(envIds, f), ...searchStage(f.q), ...drillStage(f)];
+  return [
+    ...rowStages(envIds, f),
+    ...searchStage(f.q),
+    ...drillStage(f),
+    ...(f.grnEdited ? [{ $match: { grnEdited: true } }] : []),
+  ];
 }
 
 const emptyCounts = () => ({ all: 0, ok: 0, near_expiry: 0, expired: 0 });
@@ -419,6 +426,21 @@ function toDto(r, names) {
     assignedTo: r.assignee != null ? (names?.get(String(r.assignee)) ?? String(r.assignee)) : null,
     // New scans only: every best photo + fields it shows; noResult = no session_results yet (not editable).
     ...(images ? { images, noResult: !!r.noResult } : {}),
+    grnEdited: !!r.grnEdited,
+    grnData: (() => {
+      const g = r.grnRaw;
+      if (!g || !g.submitted_data) return null;
+      return {
+        batch: g.submitted_data.batch ?? null,
+        mfd:   g.submitted_data.mfd   ?? null,
+        exp:   g.submitted_data.exp   ?? null,
+        mrp:   g.submitted_data.mrp   ?? null,
+        batchChanged: !!g.batch_changed,
+        mfdChanged:   !!g.mfd_changed,
+        expChanged:   !!g.exp_changed,
+        mrpChanged:   !!g.mrp_changed,
+      };
+    })(),
   }, r);
 }
 

@@ -10,7 +10,7 @@ const isStatus = (v: string | null): v is StatusFilter => FILTERS.some((f) => f.
 const DEFAULTS: Record<string, string> = { page: '1', status: 'all', q: '' };
 
 /** URL keys that describe the list view (carried into drill-down + detail page). */
-export const VIEW_KEYS = ['q', 'status', 'from', 'to', 'all', 'client', 'changed', 'editor', 'day'] as const;
+export const VIEW_KEYS = ['q', 'status', 'from', 'to', 'all', 'client', 'changed', 'editor', 'day', 'grnEdited'] as const;
 const EDIT_KEYS: EditKey[] = ['batch', 'mrp', 'mfd', 'expiry', 'any'];
 const isEditKey = (v: string | null): v is EditKey => EDIT_KEYS.includes(v as EditKey);
 
@@ -52,6 +52,7 @@ export function readFilter(params: URLSearchParams, scoped = true): ListFilter {
     client: scoped ? (params.get('client') ?? undefined) : undefined,
     // Edit-stats drill-down (Filter Table only). editor ignored without changed.
     ...(scoped && isEditKey(changed) ? { changed, editor: params.get('editor') || undefined } : {}),
+    grnEdited: params.get('grnEdited') === '1' ? true : undefined,
   };
 }
 

@@ -47,11 +47,27 @@ export interface DocumentItem {
   noResult?: boolean;
   /** Split team: who this capture is assigned to (name). null = shared (old capture). */
   assignedTo?: string | null;
+  /** True when client GRN revalidation data was uploaded and any field was changed. */
+  grnEdited?: boolean;
+  /** GRN revalidation values from client-submitted Excel. Null when no GRN data uploaded. */
+  grnData?: GrnData | null;
 }
 
 export interface ScanImage {
   url: string;
   fields: string[];
+}
+
+/** GRN revalidation data from client-submitted Excel. Dates are ISO YYYY-MM-DD or null. */
+export interface GrnData {
+  batch: string | null;
+  mfd: string | null;
+  exp: string | null;
+  mrp: number | null;
+  batchChanged: boolean;
+  mfdChanged: boolean;
+  expChanged: boolean;
+  mrpChanged: boolean;
 }
 
 /** Edit drill-down row info: original OCR values, fields changed (original ≠ final), who saved. */
@@ -77,6 +93,8 @@ export interface ListParams {
   /** Edit-stats drill-down: field changed ('any' = any field), optionally by this annotator. */
   changed?: EditKey;
   editor?: string;
+  /** Show only captures with GRN revalidation changes. */
+  grnEdited?: boolean;
 }
 
 export type ListFilter = Omit<ListParams, 'page' | 'pageSize'>;

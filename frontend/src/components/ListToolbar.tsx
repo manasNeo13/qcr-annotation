@@ -36,6 +36,8 @@ interface Props {
   searchPlaceholder: string;
   /** Client dropdown (NHQ only — others are locked to their own clients). */
   showScope?: boolean;
+  /** Show "GRN Edited" toggle filter. */
+  showGrnFilter?: boolean;
 }
 
 type ScopePatch = { client?: string | null };
@@ -167,9 +169,10 @@ function ScopeFiltersInner({ state }: { state: ListState }) {
  * Single-row toolbar: date · search · (filters) · status.
  * ≥ lg: one row. Smaller: status drops to its own scrollable line.
  */
-export default function ListToolbar({ state, counts, searchPlaceholder, showScope = false }: Props) {
+export default function ListToolbar({ state, counts, searchPlaceholder, showScope = false, showGrnFilter = false }: Props) {
   const { filter, latest, search, setSearch, update, setRange } = state;
   const status = filter.status ?? 'all';
+  const grnOn = !!filter.grnEdited;
   const { me } = useAccess();
   const scopeOn = showScope && !!(me?.superAdmin || me?.splitTeam);
 
@@ -221,8 +224,39 @@ export default function ListToolbar({ state, counts, searchPlaceholder, showScop
           ml: { xs: -1.5, sm: 0, lg: 'auto' },
           px: { xs: 1.5, sm: 0 },
           maxWidth: { xs: 'calc(100% + 24px)', sm: '100%' },
+          display: 'flex',
+          alignItems: 'center',
+          gap: 1,
         }}
       >
+        {showGrnFilter && (
+          <Button
+            size="small"
+            onClick={() => update({ grnEdited: grnOn ? null : '1', page: 1 })}
+            sx={{
+              px: 1.5,
+              py: 0.6,
+              minHeight: 0,
+              minWidth: 0,
+              borderRadius: '20px',
+              fontSize: 13,
+              fontWeight: 700,
+              whiteSpace: 'nowrap',
+              flexShrink: 0,
+              color: grnOn ? '#fff' : colors.brandDark,
+              bgcolor: grnOn ? colors.primary : colors.brandSoft,
+              border: `1.5px solid ${grnOn ? colors.primary : colors.brand100}`,
+              boxShadow: grnOn ? '0 2px 8px rgba(0,172,105,.25)' : 'none',
+              '&:hover': {
+                bgcolor: grnOn ? colors.brandDark : '#d1fae5',
+                border: `1.5px solid ${colors.primary}`,
+              },
+              transition: 'all .18s',
+            }}
+          >
+            GRN Edited
+          </Button>
+        )}
         <ToggleButtonGroup
           size="small"
           exclusive

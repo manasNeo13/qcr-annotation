@@ -153,7 +153,27 @@ export default function DocumentTable({
                         <Typography sx={{ fontWeight: 600, color: colors.textDark, lineHeight: 1.3 }} noWrap>
                           {doc.productName}
                         </Typography>
-                        <StatusChip status={doc.status} />
+                        <Box sx={{ display: 'flex', gap: 0.5, flexShrink: 0, alignItems: 'center' }}>
+                          {doc.grnEdited && (
+                            <Box
+                              component="span"
+                              sx={{
+                                px: 0.75,
+                                py: 0.1,
+                                borderRadius: '5px',
+                                fontSize: 11,
+                                fontWeight: 700,
+                                bgcolor: '#ecfdf5',
+                                color: '#007849',
+                                border: '1px solid #a7f3d0',
+                                lineHeight: 1.6,
+                              }}
+                            >
+                              GRN ✓
+                            </Box>
+                          )}
+                          <StatusChip status={doc.status} />
+                        </Box>
                       </Box>
                       <Typography sx={{ fontSize: 12, color: colors.muted }} noWrap>
                         Batch {doc.metadata.batchNumber || '—'}
@@ -268,6 +288,26 @@ export default function DocumentTable({
                       </TableCell>
                       <TableCell>
                         <StatusChip status={doc.status} />
+                        {doc.grnEdited && (
+                          <Box
+                            component="span"
+                            sx={{
+                              display: 'inline-block',
+                              mt: 0.5,
+                              px: 0.75,
+                              py: 0.1,
+                              borderRadius: '5px',
+                              fontSize: 11,
+                              fontWeight: 700,
+                              bgcolor: '#ecfdf5',
+                              color: '#007849',
+                              border: '1px solid #a7f3d0',
+                              lineHeight: 1.6,
+                            }}
+                          >
+                            GRN ✓
+                          </Box>
+                        )}
                       </TableCell>
                       <TableCell
                         sx={{

@@ -59,6 +59,7 @@ export default function DocumentsPage() {
           counts={data?.counts}
           searchPlaceholder="Search EAN, batch no., capture ID…"
           showScope
+          showGrnFilter
         />
         <DocumentTable
           data={data}

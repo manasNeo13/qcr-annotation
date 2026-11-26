@@ -35,7 +35,7 @@ import MetadataForm from '../components/MetadataForm';
 import StatusChip from '../components/StatusChip';
 import PageBreadcrumbs, { type Crumb } from '../components/PageBreadcrumbs';
 import { readDay, readFilter, statsPath } from '../hooks/useListState';
-import type { DocMetadata, DocumentItem } from '../types';
+import type { DocMetadata, DocumentItem, GrnData } from '../types';
 import { annotationPath, batchLabel, eanLabel } from '../utils/annotation';
 import { formatDate, formatDateTime, formatMRP } from '../utils/format';
 import type { MetadataFormValues } from '../utils/validation';
@@ -118,6 +118,80 @@ function Field({ label, value, mono }: { label: string; value: string; mono?: bo
         {value}
       </Typography>
     </Box>
+  );
+}
+
+const AMBER = { bg: '#fffbeb', border: '#fcd34d', label: '#92400e', value: '#b45309' };
+
+function GrnField({ label, value, changed, mono }: { label: string; value: string; changed: boolean; mono?: boolean }) {
+  return (
+    <Box
+      sx={{
+        p: 1.5,
+        borderRadius: '8px',
+        bgcolor: changed ? AMBER.bg : colors.surface2,
+        border: `1px solid ${changed ? AMBER.border : colors.border}`,
+        minWidth: 0,
+        transition: 'background .2s, border-color .2s',
+      }}
+    >
+      <Typography sx={{ fontSize: 13.5, fontWeight: 600, color: changed ? AMBER.label : colors.muted }}>
+        {label}
+        {changed && (
+          <Box component="span" sx={{ ml: 0.75, fontSize: 11, fontWeight: 700, color: AMBER.value }}>
+            ● Changed
+          </Box>
+        )}
+      </Typography>
+      <Typography
+        sx={{
+          fontSize: 17,
+          fontWeight: 600,
+          color: changed ? AMBER.value : colors.textDark,
+          wordBreak: 'break-word',
+          fontFamily: mono ? 'ui-monospace, monospace' : undefined,
+        }}
+      >
+        {value || '—'}
+      </Typography>
+    </Box>
+  );
+}
+
+function GrnPanel({ grn }: { grn: GrnData }) {
+  return (
+    <Paper sx={{ p: { xs: 2, sm: 3 } }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
+        <Typography variant="h5" component="h2">GRN Data</Typography>
+        {grn.batchChanged || grn.mfdChanged || grn.expChanged || grn.mrpChanged ? (
+          <Box
+            component="span"
+            sx={{
+              px: 1, py: 0.2, borderRadius: '20px', fontSize: 12, fontWeight: 700,
+              bgcolor: AMBER.bg, color: AMBER.value, border: `1px solid ${AMBER.border}`,
+            }}
+          >
+            Edited by client
+          </Box>
+        ) : (
+          <Box
+            component="span"
+            sx={{
+              px: 1, py: 0.2, borderRadius: '20px', fontSize: 12, fontWeight: 700,
+              bgcolor: '#ecfdf5', color: '#007849', border: '1px solid #a7f3d0',
+            }}
+          >
+            No changes
+          </Box>
+        )}
+      </Box>
+      <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: { xs: 1, sm: 1.5 } }}>
+        <GrnField label="Manufacturing date" value={formatDate(grn.mfd ?? '')} changed={grn.mfdChanged} />
+        <GrnField label="Expiry date"        value={formatDate(grn.exp ?? '')} changed={grn.expChanged} />
+        <GrnField label="Batch number"       value={grn.batch ?? ''}          changed={grn.batchChanged} mono />
+        <GrnField label="MRP"               value={grn.mrp != null ? `₹${Number(grn.mrp).toFixed(2)}` : '—'} changed={grn.mrpChanged} />
+      </Box>
+    </Paper>
   );
 }
 
@@ -839,6 +913,8 @@ function DocumentDetail({ id }: { id: string }) {
               </Box>
             )}
           </Paper>
+
+          {doc?.grnData && <GrnPanel grn={doc.grnData} />}
 
           {doc && <HistoryPanel doc={doc} />}
         </Box>
