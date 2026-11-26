@@ -135,7 +135,7 @@ router.post(
       return res.json({ message: 'No data rows found', inserted: 0, updated: 0, skipped: 0 });
     }
 
-    const { inserted, updated } = await repo.clientMetadata.upsertMany(records);
+    const { inserted, updated } = await repo.sessionResults.upsertGrnData(records);
     res.json({
       message: `Processed ${records.length} of ${rows.length - 1} rows`,
       inserted,

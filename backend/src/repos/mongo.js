@@ -512,7 +512,7 @@ export const mongoRepo = {
     db = client.db();
     await db.command({ ping: 1 });
     console.log(`[repo] mongo — db "${db.databaseName}"`);
-    await col('client_submited_metadata').createIndex({ request_id: 1 }, { unique: true });
+
   },
   async close() {
     await client?.close();
@@ -867,28 +867,58 @@ export const mongoRepo = {
     },
   },
 
-  clientMetadata: {
+  sessionResults: {
     /**
-     * Upsert rows from the "OCR vs GRN" Excel sheet into client_submited_metadata.
-     * Uses request_id as the unique key — re-uploading the same file is idempotent.
+     * Write GRN revalidation data from the "OCR vs GRN" Excel sheet into session_results.
+     * For each request_id finds the latest metadata doc (latest recapture), then updates
+     * the matching session_results doc under a `grn` sub-key. Idempotent on re-upload.
      */
-    async upsertMany(records) {
-      const now = new Date();
-      const ops = records.map((r) => ({
-        updateOne: {
-          filter: { request_id: r.request_id },
-          update: {
-            $set: { ...r, updated_at: now },
-            $setOnInsert: { created_at: now },
-          },
-          upsert: true,
-        },
-      }));
+    async upsertGrnData(records) {
+      if (!records.length) return { inserted: 0, updated: 0, skipped: 0 };
 
-      const result = await col('client_submited_metadata').bulkWrite(ops, { ordered: false });
+      const requestIds = records.map((r) => r.request_id);
+
+      // Find the latest metadata doc per request_id (there may be multiple recaptures).
+      const metadataDocs = await col('metadata')
+        .find(
+          { request_id: { $in: requestIds }, started_at: { $exists: true } },
+          { projection: { _id: 1, request_id: 1, started_at: 1 } },
+        )
+        .sort({ started_at: -1 })
+        .toArray();
+
+      // Keep only the latest _id per request_id (array is already newest-first).
+      const latestMetaId = new Map();
+      for (const doc of metadataDocs) {
+        const reqId = String(doc.request_id);
+        if (!latestMetaId.has(reqId)) latestMetaId.set(reqId, doc._id);
+      }
+
+      if (!latestMetaId.size) return { inserted: 0, updated: 0, skipped: records.length };
+
+      const recordByReqId = new Map(records.map((r) => [r.request_id, r]));
+      const now = new Date();
+
+      const ops = [];
+      for (const [reqId, metadataId] of latestMetaId) {
+        const r = recordByReqId.get(reqId);
+        if (!r) continue;
+        const { request_id, ...grnFields } = r;
+        ops.push({
+          updateOne: {
+            filter: { metadata_id: metadataId },
+            update: { $set: { grn: { ...grnFields, uploaded_at: now } } },
+          },
+        });
+      }
+
+      if (!ops.length) return { inserted: 0, updated: 0, skipped: records.length };
+
+      const result = await col('session_results').bulkWrite(ops, { ordered: false });
       return {
-        inserted: result.upsertedCount,
+        inserted: 0,
         updated: result.modifiedCount,
+        skipped: records.length - latestMetaId.size,
       };
     },
   },

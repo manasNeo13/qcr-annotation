@@ -169,10 +169,9 @@ export const memoryRepo = {
     },
   },
 
-  clientMetadata: {
-    async upsertMany(records) {
-      // In-memory stub — not persisted across restarts
-      return { inserted: records.length, updated: 0 };
+  sessionResults: {
+    async upsertGrnData(records) {
+      return { inserted: 0, updated: records.length, skipped: 0 };
     },
   },
 };
