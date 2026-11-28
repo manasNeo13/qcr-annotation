@@ -75,6 +75,8 @@ const listBase = z.object({
   batch: z.string().trim().max(100).optional(),
   // GRN filter: show only captures with client-submitted changed data.
   grnEdited: z.string().optional().transform((v) => v === 'true' || v === '1'),
+  // Approved filter: only captures approved (Model / GRN / edited).
+  approved: z.string().optional().transform((v) => v === 'true' || v === '1'),
 });
 export const listQuerySchema = withRange(listBase);
 

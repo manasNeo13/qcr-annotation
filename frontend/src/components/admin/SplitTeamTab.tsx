@@ -29,7 +29,7 @@ import SwapIcon from '@mui/icons-material/SwapHoriz';
 import CallSplitIcon from '@mui/icons-material/CallSplit';
 import { adminApi } from '../../api/admin';
 import { colors } from '../../theme';
-import type { SplitDivideResult, SplitMember, SplitOverview } from '../../types';
+import type { SplitAssigner, SplitDivideResult, SplitMember, SplitOverview } from '../../types';
 import { formatDateTime } from '../../utils/format';
 import { ActiveChip } from './common';
 import { ADMIN_KEYS } from './keys';
@@ -239,6 +239,38 @@ function AddDialog({ data, onClose }: { data: SplitOverview; onClose: () => void
   );
 }
 
+/** One line: is automatic sharing working on this server? */
+function AssignerStatus({ a }: { a: SplitAssigner }) {
+  const ago = a.lastRunAt ? Math.round((Date.now() - new Date(a.lastRunAt).getTime()) / 1000) : null;
+  const stuck = !a.running || ago == null || ago > 120;
+  const bad = !!a.lastError || stuck;
+  const t = a.today;
+  return (
+    <Box
+      sx={{
+        px: { xs: 1.5, sm: 2 },
+        py: 1,
+        fontSize: 12.5,
+        color: bad ? '#b91c1c' : colors.muted,
+        bgcolor: bad ? '#fef2f2' : colors.surface2,
+        borderBottom: `1px solid ${colors.border}`,
+        display: 'flex',
+        gap: 1.5,
+        flexWrap: 'wrap',
+      }}
+    >
+      <span>
+        <b>Auto sharing:</b>{' '}
+        {stuck ? 'not running' : `last check ${ago}s ago`}
+        {a.lastError ? ` · error: ${a.lastError.message}` : ''}
+      </span>
+      <span>Today: {t.found} new found · {t.assigned} shared out · {t.keptShared} kept shared (began before team)</span>
+      <span>Members known: {a.members}</span>
+      <span>Server: {a.server} (since {a.bootAt ? formatDateTime(a.bootAt) : '—'})</span>
+    </Box>
+  );
+}
+
 /**
  * Split team (NHQ): members, today's / total captures, add people, move captures, remove (only when empty).
  * New captures are divided equally per day among active members; old captures are shared.
@@ -302,6 +334,7 @@ export default function SplitTeamTab() {
           Add people
         </Button>
       </Box>
+      {data?.assigner && <AssignerStatus a={data.assigner} />}
 
       <TableContainer sx={{ overflowX: 'auto' }}>
         <Table size="small" sx={{ minWidth: 640 }}>

@@ -31,6 +31,8 @@ import type {
   Neighbors,
   StatsFilter,
   UploadResult,
+  ApproveSource,
+  AccuracyReport,
 } from '../types';
 import { request, uploadRequest, USE_MOCK } from './client';
 import { mockApi } from './mock';
@@ -90,6 +92,13 @@ const real = {
     return request<EditStats>(`/documents/stats?${qs}`);
   },
 
+  /** Model / GRN vs approved values (approved captures in range). */
+  getAccuracy: (f: StatsFilter) => {
+    const qs = new URLSearchParams();
+    for (const [k, v] of Object.entries(f)) if (v) qs.set(k, v);
+    return request<AccuracyReport>(`/documents/accuracy?${qs}`);
+  },
+
   getNeighbors: (id: string, filter: ListFilter) =>
     request<Neighbors>(`/documents/${encodeURIComponent(id)}/neighbors?${filterQs(filter)}`),
 
@@ -104,6 +113,12 @@ const real = {
     request<DocumentItem>(`/documents/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       body: JSON.stringify({ metadata }),
+    }),
+
+  approveDocument: (id: string, source: ApproveSource) =>
+    request<DocumentItem>(`/documents/${encodeURIComponent(id)}/approve`, {
+      method: 'POST',
+      body: JSON.stringify({ source }),
     }),
 
   uploadClientRevalidateData: (file: File) => {

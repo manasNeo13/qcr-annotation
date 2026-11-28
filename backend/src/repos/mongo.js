@@ -13,9 +13,10 @@ import dns from 'node:dns';
 import { MongoClient, ObjectId } from 'mongodb';
 import { env } from '../config/env.js';
 import { SDK_EDITOR, computeEditStats, diffFields, editedPage } from '../lib/editStats.js';
+import { computeAccuracy } from '../lib/accuracy.js';
 import { HttpError } from '../lib/httpError.js';
 import { clientsOf, isSuperAdmin, roleKey } from '../lib/permissions.js';
-import { IST_OFFSET_MS, istWindow } from '../lib/istDay.js';
+import { IST_OFFSET_MS, istDay, istWindow } from '../lib/istDay.js';
 import { NEAR_EXPIRY_PCT, startOfToday, toISODate } from '../lib/status.js';
 import { NONE_KEY } from '../lib/validation.js';
 import { safeDecode } from '../lib/safeDecode.js';
@@ -230,6 +231,33 @@ const predictedOf = {
   ],
 };
 
+/**
+ * Capture time only (same `ts` as rowStages) → one row { _id: env_id, ts }.
+ * Calendar dots / latest day: no session_results lookup, no values → much cheaper.
+ */
+function tsStages(envIds) {
+  return [
+    { $project: { env_id: 1, timestamp: 1, started_at: 1, is_recapture: 1 } },
+    {
+      $group: {
+        _id: '$env_id',
+        ts: { $max: '$timestamp' },
+        latestScan: {
+          $max: {
+            $cond: [
+              { $ifNull: ['$started_at', false] },
+              { recapture: { $cond: [{ $ifNull: ['$is_recapture', false] }, 1, 0] }, t: '$started_at' },
+              null,
+            ],
+          },
+        },
+      },
+    },
+    { $match: { _id: { $in: envIds } } },
+    { $project: { ts: { $ifNull: ['$ts', '$latestScan.t'] } } },
+  ];
+}
+
 /** metadata docs → one row per env_id, with status. envIds = allowed set (filtered AFTER group — $in before group is ~15x slower on Cosmos). */
 function rowStages(envIds, { from, to } = {}) {
   const today = startOfToday();
@@ -290,7 +318,7 @@ function rowStages(envIds, { from, to } = {}) {
     { $addFields: { cur: { $mergeObjects: [{ $ifNull: ['$sr.predicted', {}] }, { $ifNull: ['$sr.edited_values', {}] }] } } },
     {
       $project: {
-        ts: 1, img: 1, version: 1, history: 1, images: 1, assignee: 1,
+        ts: 1, img: 1, version: 1, history: 1, images: 1, assignee: 1, scanId: 1,
         scan: IS_SCAN,
         noResult: { $and: [IS_SCAN, { $eq: [{ $type: '$sr' }, 'missing'] }] },
         // Scans: edited_by = dashboard user id (SDK edits leave it unset); time = updated_at once edited.
@@ -308,6 +336,10 @@ function rowStages(envIds, { from, to } = {}) {
         pBatch: { $cond: [IS_SCAN, textOrNull('$sr.predicted.batch'), firstNonNull('$pBatches')] },
         grnEdited: { $ifNull: ['$sr.grn.edited', false] },
         grnRaw: { $ifNull: ['$sr.grn', null] },
+        approvalRaw: { $ifNull: ['$sr.approval', null] },
+        metaStatus: { $eq: ['$sr.metadata_status', true] },
+        grnStatus: { $eq: ['$sr.grn_status', true] },
+        approved: { $or: [{ $eq: ['$sr.metadata_status', true] }, { $eq: ['$sr.grn_status', true] }] },
       },
     },
     {
@@ -363,6 +395,7 @@ async function filteredRows(f, user) {
     ...searchStage(f.q),
     ...drillStage(f),
     ...(f.grnEdited ? [{ $match: { grnEdited: true } }] : []),
+    ...(f.approved ? [{ $match: { approved: true } }] : []),
   ];
 }
 
@@ -413,6 +446,37 @@ async function userNames() {
   return map;
 }
 
+/** GRN upload → DTO metadata shape (dates already ISO). null = no GRN data. */
+const grnMeta = (g) =>
+  g?.submitted_data
+    ? metaOf({
+        mrp: g.submitted_data.mrp,
+        mfg: g.submitted_data.mfd ? new Date(`${g.submitted_data.mfd}T00:00:00Z`) : null,
+        exp: g.submitted_data.exp ? new Date(`${g.submitted_data.exp}T00:00:00Z`) : null,
+        batch: g.submitted_data.batch,
+      })
+    : null;
+
+const APPROVE_FIELDS = ['mfgDate', 'expiryDate', 'batchNumber', 'mrp'];
+const blankVal = (v) => v == null || v === '';
+const normBatch = (v) => String(v).replace(/\s+/g, '').toUpperCase();
+
+/**
+ * Per field: was this source right vs the approved values?
+ * true = same, false = different (or gave a value where none is on the photo), null = source has no value (not counted).
+ */
+function marks(final, src) {
+  return Object.fromEntries(
+    APPROVE_FIELDS.map((k) => {
+      if (!src || blankVal(src[k])) return [k, null];
+      if (blankVal(final[k])) return [k, false];
+      if (k === 'mrp') return [k, Math.abs(Number(final[k]) - Number(src[k])) < 0.01];
+      if (k === 'batchNumber') return [k, normBatch(final[k]) === normBatch(src[k])];
+      return [k, final[k] === src[k]];
+    }),
+  );
+}
+
 function toDto(r, names) {
   const ts = iso(r.ts)?.toISOString() ?? new Date(0).toISOString();
   const ean = r.ean != null ? String(r.ean) : '';
@@ -437,7 +501,27 @@ function toDto(r, names) {
     assignedTo: r.assignee != null ? (names?.get(String(r.assignee)) ?? String(r.assignee)) : null,
     // New scans only: every best photo + fields it shows; noResult = no session_results yet (not editable).
     ...(images ? { images, noResult: !!r.noResult } : {}),
+    // Model = what our model read (predicted), before any edit.
+    ...(r.scan && !r.noResult ? { modelData: metaOf({ mrp: r.pMrp, mfg: r.pMfg, exp: r.pExp, batch: r.pBatch }) } : {}),
+    approval: (() => {
+      const a = r.approvalRaw;
+      if (!a?.at || !(r.metaStatus || r.grnStatus)) return null;
+      return {
+        source: a.source,
+        by: a.by != null ? (names?.get(String(a.by)) ?? String(a.by)) : null,
+        at: iso(a.at)?.toISOString() ?? null,
+        model: a.model ?? null,
+        grn: a.grn ?? null,
+        // Values changed after approval (SDK / another edit) → needs a new approval.
+        stale: !!a.final && diffFields(a.final, metaOf(r)).length > 0,
+      };
+    })(),
     grnEdited: !!r.grnEdited,
+    // Approved side (session_results.metadata_status / grn_status). Values changed since → not approved.
+    ...(() => {
+      const stale = !!r.approvalRaw?.final && diffFields(r.approvalRaw.final, metaOf(r)).length > 0;
+      return { metadataStatus: !!r.metaStatus && !stale, grnStatus: !!r.grnStatus && !stale };
+    })(),
     grnData: (() => {
       const g = r.grnRaw;
       if (!g || !g.submitted_data) return null;
@@ -457,7 +541,7 @@ function toDto(r, names) {
 
 /** Rows → DTOs (resolves scan editor ids to names only when needed). */
 async function toDtos(rows) {
-  const names = rows.some((r) => (r.scan && r.editedBy != null) || r.assignee != null) ? await userNames() : null;
+  const names = rows.some((r) => (r.scan && r.editedBy != null) || r.assignee != null || r.approvalRaw) ? await userNames() : null;
   return rows.map((r) => toDto(r, names));
 }
 
@@ -531,6 +615,224 @@ async function updateScan(id, latest, cur, metadata, user) {
   );
   if (!res.matchedCount) throw new HttpError(409, 'Capture changed meanwhile — reload and retry');
   return getRow(id);
+}
+
+/** Latest recapture of a new scan (single sort key: Cosmos ignores 2nd keys on ties). null = old capture. */
+const latestScanOf = (envId) =>
+  col('metadata').findOne({ env_id: envId, started_at: { $exists: true } }, { sort: { started_at: -1 }, projection: { _id: 1 } });
+
+/**
+ * Approval of a new scan → session_results.approval:
+ * source (model | grn | edited), who, when, final values, and per field whether Model / GRN were right.
+ */
+function approvalDoc(row, source, byId, grnRaw, firstAt) {
+  const grnVals = grnMeta(grnRaw);
+  const now = new Date();
+  return {
+    source,
+    by: byId,
+    at: now,
+    // First approval time: keeps a capture's place in the accuracy 200-groups when re-approved.
+    first_at: firstAt ?? now,
+    final: row.metadata,
+    model: marks(row.metadata, row.modelData),
+    grn: grnVals ? marks(row.metadata, grnVals) : null,
+  };
+}
+
+/** Which side was approved → session_results.metadata_status / grn_status. auto = both (values = GRN). */
+const STATUS_OF = {
+  metadata: { metadata_status: true, grn_status: false },
+  grn: { metadata_status: false, grn_status: true },
+  auto: { metadata_status: true, grn_status: true },
+};
+
+/**
+ * Approval of a new scan → session_results: metadata_status / grn_status + approval
+ * (source metadata | grn | auto, who (null = automatic), when, final values, per field whether Model / GRN were right).
+ */
+async function writeApproval(scan, row, source, user, grnRaw) {
+  const prev = await col('session_results').findOne({ metadata_id: scan._id }, { projection: { 'approval.first_at': 1 } });
+  await col('session_results').updateOne(
+    { metadata_id: scan._id },
+    { $set: { ...STATUS_OF[source], approval: approvalDoc(row, source, user?.id ?? null, grnRaw, prev?.approval?.first_at) } },
+  );
+  scheduleAccuracy(row.id);
+  return getRow(row.id);
+}
+
+/** Values changed after approval → not approved any more (both statuses false, approval removed). */
+async function clearApproval(scan, envId) {
+  const res = await col('session_results').updateOne(
+    { metadata_id: scan._id, $or: [{ metadata_status: true }, { grn_status: true }, { approval: { $exists: true } }] },
+    { $set: { metadata_status: false, grn_status: false }, $unset: { approval: '' } },
+  );
+  if (res.modifiedCount) scheduleAccuracy(envId);
+}
+
+/** Same value? Blank + blank = same. MRP ±0.01, batch ignores spaces / case. */
+const sameVal = (k, a, b) => {
+  if (blankVal(a) || blankVal(b)) return blankVal(a) && blankVal(b);
+  if (k === 'mrp') return Math.abs(Number(a) - Number(b)) < 0.01;
+  if (k === 'batchNumber') return normBatch(a) === normBatch(b);
+  return a === b;
+};
+
+/** Shown values = GRN values on all 4 fields → auto approve. */
+const sameAsGrn = (metadata, grnVals) => !!grnVals && APPROVE_FIELDS.every((k) => sameVal(k, metadata[k], grnVals[k]));
+
+/** GRN on top of current values: GRN blanks keep the current value. */
+const withGrn = (metadata, grnVals) =>
+  Object.fromEntries(APPROVE_FIELDS.map((k) => [k, blankVal(grnVals[k]) ? metadata[k] : grnVals[k]]));
+
+// ── Accuracy (approved GRN-edited captures) ─────────────────────────────
+/** Approved now: a status is true and values did not change since (SDK edit → not approved). */
+const isApprovedRow = (r) =>
+  (r.metaStatus || r.grnStatus) && !!r.approvalRaw?.final && !diffFields(r.approvalRaw.final, metaOf(r)).length;
+
+/** Raw row → lib/accuracy item. */
+function accuracyItem(r, client, names) {
+  const a = r.approvalRaw;
+  return {
+    id: r._id,
+    ean: r.ean != null ? String(r.ean) : '',
+    client,
+    at: iso(a.at)?.toISOString() ?? null,
+    firstAt: iso(a.first_at ?? a.at)?.toISOString() ?? null,
+    by: a.by != null ? (names?.get(String(a.by)) ?? String(a.by)) : 'Auto',
+    truth: a.final,
+    model: metaOf({ mrp: r.pMrp, mfg: r.pMfg, exp: r.pExp, batch: r.pBatch }),
+    grn: grnMeta(r.grnRaw),
+    changed: r.grnRaw
+      ? {
+          batchChanged: !!r.grnRaw.batch_changed,
+          mfdChanged: !!r.grnRaw.mfd_changed,
+          expChanged: !!r.grnRaw.exp_changed,
+          mrpChanged: !!r.grnRaw.mrp_changed,
+        }
+      : null,
+  };
+}
+
+/**
+ * `accuracy` collection: per client, every 200 approved GRN-edited captures (in first-approval order) = 1 doc
+ * { client, seq, size, complete, first_approved_at, last_approved_at, captures, groups, wins, updated_at }.
+ * Last doc of a client holds the rest (< 200, complete false) and fills up. Rebuilt per client after changes
+ * (approve / edit / GRN upload), so a changed capture updates its group. Summary only: rebuildable any time.
+ */
+const ACC_CHUNK = 200;
+const ACC_DEBOUNCE_MS = 10_000;
+const accTimers = new Map(); // client → timeout
+let accIndexReady = false;
+
+async function rebuildAccuracy(client) {
+  if (!accIndexReady) {
+    await col('accuracy').createIndex({ client: 1, seq: 1 }, { unique: true });
+    accIndexReady = true;
+  }
+  const envs = (await scanEnvs()).filter((x) => x.client === client).map((x) => x.env);
+  const rows = envs.length
+    ? await col('metadata').aggregate(rowStages(envs), { allowDiskUse: true }).toArray()
+    : [];
+  const items = rows
+    .filter((r) => r.scan && !r.noResult && r.grnEdited && isApprovedRow(r))
+    .map((r) => accuracyItem(r, client, null))
+    .sort((a, b) => String(a.firstAt).localeCompare(String(b.firstAt)) || String(a.id).localeCompare(String(b.id)));
+  const now = new Date();
+  const ops = [];
+  for (let i = 0, seq = 1; i < items.length; i += ACC_CHUNK, seq += 1) {
+    const part = items.slice(i, i + ACC_CHUNK);
+    const rep = computeAccuracy(part);
+    const keep = ['ALL', 'EDITED', 'NOT_EDITED'];
+    ops.push({
+      replaceOne: {
+        filter: { client, seq },
+        replacement: {
+          client,
+          seq,
+          size: part.length,
+          complete: part.length === ACC_CHUNK,
+          first_approved_at: new Date(part[0].firstAt),
+          last_approved_at: new Date(part[part.length - 1].firstAt),
+          captures: part.map((x) => x.id),
+          groups: Object.fromEntries(keep.filter((k) => rep.groups[k]).map((k) => [k, rep.groups[k]])),
+          wins: rep.wins,
+          updated_at: now,
+        },
+        upsert: true,
+      },
+    });
+  }
+  if (ops.length) await col('accuracy').bulkWrite(ops, { ordered: false });
+  await col('accuracy').deleteMany({ client, seq: { $gt: ops.length } });
+  return { client, groups: ops.length, captures: items.length };
+}
+
+/** Rebuild that capture's client's accuracy docs a little later (many clicks / one upload → one rebuild). */
+function scheduleAccuracy(envIdOrClient, { isClient = false } = {}) {
+  const run = async () => {
+    const client = isClient ? envIdOrClient : (await scanEnvs()).find((x) => x.env === envIdOrClient)?.client;
+    if (client == null) return;
+    clearTimeout(accTimers.get(client));
+    accTimers.set(
+      client,
+      setTimeout(() => {
+        accTimers.delete(client);
+        rebuildAccuracy(client).catch((e) => console.error('[accuracy] rebuild failed', client, e.message));
+      }, ACC_DEBOUNCE_MS),
+    );
+  };
+  run().catch((e) => console.error('[accuracy] schedule failed', e.message));
+}
+
+/**
+ * Auto approve after a GRN upload (or backfill): shown values = GRN on all 4 fields → both statuses (source auto).
+ * Captures a person approved stay as they are. An earlier auto approval that no longer matches is removed.
+ * → { autoApproved, cleared }
+ */
+async function autoApproveEnvs(envIds, { dry = false } = {}) {
+  if (!envIds.length) return { autoApproved: 0, cleared: 0 };
+  const rows = await col('metadata').aggregate(rowStages(envIds), { allowDiskUse: true }).toArray();
+  const ops = [];
+  const touched = new Set();
+  let autoApproved = 0;
+  let cleared = 0;
+  for (const r of rows) {
+    if (!r.scan || r.noResult || !r.scanId) continue;
+    const metadata = metaOf(r);
+    const g = grnMeta(r.grnRaw);
+    const src = r.approvalRaw?.source;
+    const approvedNow = isApprovedRow(r);
+    if (approvedNow && src !== 'auto') continue; // person approved → keep
+    if (sameAsGrn(metadata, g)) {
+      if (approvedNow) continue; // already auto approved with these values
+      const row = { metadata, modelData: metaOf({ mrp: r.pMrp, mfg: r.pMfg, exp: r.pExp, batch: r.pBatch }) };
+      ops.push({
+        updateOne: {
+          filter: { metadata_id: r.scanId },
+          update: { $set: { ...STATUS_OF.auto, approval: approvalDoc(row, 'auto', null, r.grnRaw, r.approvalRaw?.first_at) } },
+        },
+      });
+      autoApproved += 1;
+      touched.add(r._id);
+    } else if (src === 'auto' || r.metaStatus || r.grnStatus) {
+      ops.push({
+        updateOne: {
+          filter: { metadata_id: r.scanId },
+          update: { $set: { metadata_status: false, grn_status: false }, $unset: { approval: '' } },
+        },
+      });
+      cleared += 1;
+      touched.add(r._id);
+    }
+  }
+  if (dry) return { autoApproved, cleared, dry: true };
+  for (let i = 0; i < ops.length; i += 500) await col('session_results').bulkWrite(ops.slice(i, i + 500), { ordered: false });
+  if (touched.size) {
+    const clientOf = new Map((await scanEnvs()).map((x) => [x.env, x.client]));
+    for (const c of new Set([...touched].map((e) => clientOf.get(e)).filter((c) => c != null))) scheduleAccuracy(c, { isClient: true });
+  }
+  return { autoApproved, cleared };
 }
 
 // ── Repo ─────────────────────────────────────────────────────────────────
@@ -726,8 +1028,7 @@ export const mongoRepo = {
       const [res] = await col('metadata')
         .aggregate(
           [
-            ...rowStages(envIds),
-            { $project: { ts: 1 } },
+            ...tsStages(envIds),
             {
               $facet: {
                 latest: [{ $sort: { ts: -1 } }, { $limit: 1 }],
@@ -747,7 +1048,18 @@ export const mongoRepo = {
           { allowDiskUse: true },
         )
         .toArray();
-      const latestTs = res.latest[0]?.ts;
+      let latestTs = res.latest[0]?.ts;
+      // Split team member: open on the latest day with captures assigned to THEM (not shared ones).
+      if ((await scope(user.id)).member) {
+        const own = await owners();
+        const mine = envIds.filter((e) => own.get(e) === String(user.id));
+        if (mine.length) {
+          const [r] = await col('metadata')
+            .aggregate([...tsStages(mine), { $sort: { ts: -1 } }, { $limit: 1 }], { allowDiskUse: true })
+            .toArray();
+          if (r?.ts) latestTs = r.ts;
+        }
+      }
       return {
         days: res.days.map((d) => ({ date: d._id, count: d.count })),
         latest: latestTs ? new Date(latestTs.getTime() + IST_OFFSET_MS).toISOString().slice(0, 10) : null,
@@ -829,6 +1141,22 @@ export const mongoRepo = {
       return stats;
     },
 
+    /** Accuracy page: approved new scans in [from, to] → Model / GRN vs approved values (lib/accuracy.js). */
+    async accuracy({ from, to, client }, user) {
+      const envIds = await scopedEnvIds(user.id, { client });
+      if (!envIds.length) return computeAccuracy([], { total: 0 });
+      const [rows, s] = await Promise.all([
+        col('metadata').aggregate(rowStages(envIds, { from, to }), { allowDiskUse: true }).toArray(),
+        scope(user.id),
+      ]);
+      // GRN-edited captures only (user decision 2026-11-28).
+      const pool = rows.filter((r) => r.scan && !r.noResult && r.grnEdited);
+      const approved = pool.filter(isApprovedRow);
+      const names = approved.length ? await userNames() : null;
+      const clientOf = new Map(s.rows.map((x) => [x.env, x.client]));
+      return computeAccuracy(approved.map((r) => accuracyItem(r, clientOf.get(r._id) ?? '', names)), { total: pool.length });
+    },
+
     /** Stats drill-down list: scoped captures in range + search, filtered by edit rules in JS. */
     async edited(f, user) {
       return editedPage(await editedRows(f, user), f);
@@ -862,13 +1190,43 @@ export const mongoRepo = {
       return rows.map((r) => r._id);
     },
 
+    /**
+     * Approve a new scan. 'metadata' → values as shown are final (metadata_status).
+     * 'grn' → GRN values written into the scan (blank GRN fields keep the current value), then final (grn_status).
+     * Values then equal GRN on all fields → both statuses (source auto).
+     */
+    async approve(id, source, user) {
+      await assertCanAccess(user.id, id);
+      const cur = await getRow(id);
+      if (!cur) return null;
+      const scan = await latestScanOf(id);
+      if (!scan || cur.noResult) throw new HttpError(409, 'Only new scans with a saved result can be approved');
+      const sr = await col('session_results').findOne({ metadata_id: scan._id }, { projection: { grn: 1 } });
+      const g = grnMeta(sr?.grn);
+      let values = cur.metadata;
+      if (source === 'grn') {
+        if (!g) throw new HttpError(409, 'No GRN data for this capture');
+        values = withGrn(cur.metadata, g);
+      }
+      const row = diffFields(cur.metadata, values).length ? await updateScan(id, scan, cur, values, user) : cur;
+      return writeApproval(scan, row, sameAsGrn(row.metadata, g) ? 'auto' : source, user, sr?.grn);
+    },
+
     async update(id, metadata, user) {
       await assertCanAccess(user.id, id);
       const cur = await getRow(id);
       if (!cur) return null;
-      // New scan → edit its latest recapture's session_results (single sort key: Cosmos ignores 2nd keys on ties).
-      const scan = await col('metadata').findOne({ env_id: id, started_at: { $exists: true } }, { sort: { started_at: -1 }, projection: { _id: 1 } });
-      if (scan) return updateScan(id, scan, cur, metadata, user);
+      // New scan → edit its latest recapture's session_results. Changed values → not approved any more,
+      // unless they now match GRN on all fields (auto approve).
+      const scan = await latestScanOf(id);
+      if (scan) {
+        if (!diffFields(cur.metadata, metadata).length) return cur;
+        const row = await updateScan(id, scan, cur, metadata, user);
+        const sr = await col('session_results').findOne({ metadata_id: scan._id }, { projection: { grn: 1 } });
+        if (sameAsGrn(row.metadata, grnMeta(sr?.grn))) return writeApproval(scan, row, 'auto', null, sr?.grn);
+        await clearApproval(scan, id);
+        return getRow(id);
+      }
       const [latest] = await col('metadata').find({ env_id: id }).sort({ timestamp: -1 }).limit(1).toArray();
       const now = new Date();
       const updated = await col('metadata').findOneAndUpdate(
@@ -915,7 +1273,7 @@ export const mongoRepo = {
       const metadataDocs = await col('metadata')
         .find(
           { request_id: { $in: requestIds }, started_at: { $exists: true } },
-          { projection: { _id: 1, request_id: 1, started_at: 1, is_recapture: 1 } },
+          { projection: { _id: 1, env_id: 1, request_id: 1, started_at: 1, is_recapture: 1 } },
         )
         .sort({ is_recapture: -1, started_at: -1 }) // recapture wins; latest wins among ties
         .toArray();
@@ -931,11 +1289,16 @@ export const mongoRepo = {
 
       const recordByReqId = new Map(records.map((r) => [r.request_id, r]));
       const now = new Date();
+      const startedOf = new Map(metadataDocs.map((d) => [String(d._id), d.started_at]));
+      const dayCounts = new Map(); // IST capture day → captures that got GRN
 
       const ops = [];
       for (const [reqId, metadataId] of latestMetaId) {
         const r = recordByReqId.get(reqId);
         if (!r) continue;
+        const t = startedOf.get(String(metadataId));
+        const day = t instanceof Date && !Number.isNaN(t.getTime()) ? istDay(t) : 'unknown';
+        dayCounts.set(day, (dayCounts.get(day) ?? 0) + 1);
         const { request_id, ...grnFields } = r;
         ops.push({
           updateOne: {
@@ -948,11 +1311,49 @@ export const mongoRepo = {
       if (!ops.length) return { inserted: 0, updated: 0, skipped: records.length };
 
       const result = await col('session_results').bulkWrite(ops, { ordered: false });
+      // Values = GRN on all fields → approved automatically.
+      const envIds = [...new Set(metadataDocs.filter((d) => recordByReqId.has(String(d.request_id))).map((d) => d.env_id).filter(Boolean))];
+      const { autoApproved } = await autoApproveEnvs(envIds);
       return {
         inserted: 0,
         updated: result.modifiedCount,
         skipped: records.length - latestMetaId.size,
+        autoApproved,
+        // Capture day (IST) of the captures that got GRN data, oldest first.
+        byDay: [...dayCounts].sort(([a], [b]) => a.localeCompare(b)).map(([date, count]) => ({ date, count })),
       };
+    },
+
+    /**
+     * One-off backfill: old approvals → metadata_status / grn_status, then auto approve every capture with GRN,
+     * then rebuild all accuracy docs.
+     */
+    async backfillApprovals({ dry = false } = {}) {
+      const ids = (await col('session_results').find({ grn: { $exists: true } }, { projection: { metadata_id: 1 } }).toArray()).map((d) => d.metadata_id);
+      const envIds = [];
+      for (let i = 0; i < ids.length; i += 1000) {
+        const docs = await col('metadata').find({ _id: { $in: ids.slice(i, i + 1000) } }, { projection: { env_id: 1 } }).toArray();
+        envIds.push(...docs.map((d) => d.env_id).filter(Boolean));
+      }
+      if (dry) {
+        const oldCount = await col('session_results').countDocuments({ approval: { $exists: true }, metadata_status: { $exists: false } });
+        return { converted: oldCount, ...(await autoApproveEnvs([...new Set(envIds)], { dry: true })) };
+      }
+      const old = await col('session_results')
+        .find({ approval: { $exists: true }, metadata_status: { $exists: false } }, { projection: { 'approval.source': 1, 'approval.at': 1 } })
+        .toArray();
+      for (const d of old) {
+        const st = d.approval?.source === 'grn' ? STATUS_OF.grn : STATUS_OF.metadata;
+        await col('session_results').updateOne(
+          { _id: d._id },
+          { $set: { ...st, 'approval.source': d.approval?.source === 'grn' ? 'grn' : 'metadata', 'approval.first_at': d.approval?.at ?? new Date() } },
+        );
+      }
+      const auto = await autoApproveEnvs([...new Set(envIds)]);
+      const clients = [...new Set((await scanEnvs()).map((x) => x.client))];
+      const rebuilt = [];
+      for (const c of clients) rebuilt.push(await rebuildAccuracy(c));
+      return { converted: old.length, ...auto, accuracy: rebuilt.filter((r) => r.groups) };
     },
   },
 };

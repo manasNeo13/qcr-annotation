@@ -10,7 +10,7 @@ const isStatus = (v: string | null): v is StatusFilter => FILTERS.some((f) => f.
 const DEFAULTS: Record<string, string> = { page: '1', status: 'all', q: '' };
 
 /** URL keys that describe the list view (carried into drill-down + detail page). */
-export const VIEW_KEYS = ['q', 'status', 'from', 'to', 'all', 'client', 'changed', 'editor', 'day', 'grnEdited'] as const;
+export const VIEW_KEYS = ['q', 'status', 'from', 'to', 'all', 'client', 'changed', 'editor', 'day', 'grnEdited', 'approved'] as const;
 const EDIT_KEYS: EditKey[] = ['batch', 'mrp', 'mfd', 'expiry', 'any'];
 const isEditKey = (v: string | null): v is EditKey => EDIT_KEYS.includes(v as EditKey);
 
@@ -29,6 +29,12 @@ export function carryParams(params: URLSearchParams, drop: string[] = [], extra:
 export function statsPath(params: URLSearchParams) {
   const s = carryParams(params, ['q', 'status'], params.get('page') ? { page: params.get('page')! } : {}).toString();
   return `/stats${s ? `?${s}` : ''}`;
+}
+
+/** Accuracy page link keeping date range + client. */
+export function accuracyPath(params: URLSearchParams) {
+  const s = carryParams(params, ['q', 'status', 'approved', 'changed', 'editor', 'day', 'grnEdited']).toString();
+  return `/accuracy${s ? `?${s}` : ''}`;
 }
 
 /** Edit Stats drill-down day (single capture day picked in "By capture day" table). */
@@ -53,6 +59,7 @@ export function readFilter(params: URLSearchParams, scoped = true): ListFilter {
     // Edit-stats drill-down (Filter Table only). editor ignored without changed.
     ...(scoped && isEditKey(changed) ? { changed, editor: params.get('editor') || undefined } : {}),
     grnEdited: params.get('grnEdited') === '1' ? true : undefined,
+    approved: params.get('approved') === '1' ? true : undefined,
   };
 }
 

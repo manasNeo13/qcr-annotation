@@ -52,6 +52,12 @@ router.get('/stats', requirePerm('view_stats'), async (req, res, next) => {
   res.json(await repo.documents.editStats(f, req.user));
 });
 
+/** Accuracy: Model / GRN vs approved values (approved captures only, capture day IST). */
+router.get('/accuracy', requirePerm('view_accuracy'), async (req, res) => {
+  const f = parse(statsQuerySchema, req.query);
+  res.json(await repo.documents.accuracy(f, req.user));
+});
+
 /**
  * Edit stats drill-down: captures (capture day in range) where `changed` field was edited,
  * optionally by `editor`. Same rules as /stats → counts match. Items carry `edit` (original, changed, editors).
@@ -128,6 +134,19 @@ router.get('/:id', canView, async (req, res) => {
 router.patch('/:id', requirePerm('edit_capture'), async (req, res) => {
   const { metadata } = parse(updateBodySchema, req.body ?? {});
   const doc = await repo.documents.update(req.params.id, metadata, req.user);
+  idsCache.clear();
+  if (!doc) throw notFound('Document');
+  res.json(present(doc));
+});
+
+const APPROVE_SOURCES = ['metadata', 'grn'];
+
+/** Approve a capture: metadata (values as shown) or grn (GRN values written in). Sets metadata_status / grn_status. */
+router.post('/:id/approve', requirePerm('edit_capture'), async (req, res) => {
+  const source = req.body?.source;
+  if (!APPROVE_SOURCES.includes(source)) throw new HttpError(400, 'source must be metadata or grn');
+  if (!repo.documents.approve) throw new HttpError(501, 'Approve needs the Mongo data source');
+  const doc = await repo.documents.approve(req.params.id, source, req.user);
   idsCache.clear();
   if (!doc) throw notFound('Document');
   res.json(present(doc));

@@ -1,6 +1,7 @@
 /** In-memory repo (DATA_SOURCE=memory). Dev only — resets on restart. No store scoping. */
 import { labelImage, seedDocuments, seedUsers } from '../dev/seed.js';
 import { computeEditStats, editedPage } from '../lib/editStats.js';
+import { computeAccuracy } from '../lib/accuracy.js';
 import { istDay } from '../lib/istDay.js';
 import { getStatus } from '../lib/status.js';
 import { NONE_KEY } from '../lib/validation.js';
@@ -141,6 +142,11 @@ export const memoryRepo = {
     /** Capture day = createdAt (IST). */
     async editStats({ from, to, detail }) {
       return computeEditStats(capturedIn({ from, to }).map(toDto), { detail });
+    },
+
+    /** Accuracy page: demo data has no approvals → empty report. */
+    async accuracy() {
+      return computeAccuracy([], { total: 0 });
     },
 
     /** Stats drill-down list (see lib/editStats editedPage). */

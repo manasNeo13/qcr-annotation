@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import dayjs, { type Dayjs } from 'dayjs';
 import { useQuery } from '@tanstack/react-query';
-import { Box, Button, ButtonBase, Divider, IconButton, Popover, Typography } from '@mui/material';
+import { Box, Button, ButtonBase, CircularProgress, Divider, IconButton, Popover, Typography } from '@mui/material';
 import CalendarIcon from '@mui/icons-material/CalendarMonthOutlined';
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft';
 import ChevronRightIcon from '@mui/icons-material/ChevronRight';
@@ -40,12 +40,14 @@ export default function DateRangeFilter({ from, to, latest, scope = {}, onChange
   const gridFrom = grid[0].format(F);
   const gridTo = grid[41].format(F);
 
-  const { data } = useQuery({
+  const { data, isPending, isError } = useQuery({
     queryKey: ['days', gridFrom, gridTo, scope],
     queryFn: () => api.getDays(gridFrom, gridTo, scope),
     enabled: !!anchor,
     staleTime: 60_000,
   });
+  // Dates show at once; dots fade in when the capture days arrive.
+  const dotsLoading = !!anchor && isPending && !isError;
   const counts = useMemo(() => new Map(data?.days.map((d) => [d.date, d.count])), [data]);
 
   const open = (el: HTMLElement) => {
@@ -187,8 +189,8 @@ export default function DateRangeFilter({ from, to, latest, scope = {}, onChange
                     disabled={future}
                     onClick={() => pick(key)}
                     onMouseEnter={() => pendingStart && setHover(key)}
-                    title={n ? `${n} capture${n > 1 ? 's' : ''}` : 'No captures'}
-                    aria-label={`${d.format('DD MMMM YYYY')}, ${n} captures`}
+                    title={dotsLoading ? 'Checking captures…' : n ? 'Has captures' : 'No captures'}
+                    aria-label={`${d.format('DD MMMM YYYY')}${dotsLoading ? '' : n ? ', has captures' : ', no captures'}`}
                     aria-pressed={edge || inRange}
                     sx={{
                       height: 38,
@@ -212,15 +214,37 @@ export default function DateRangeFilter({ from, to, latest, scope = {}, onChange
                         height: 5,
                         mt: '2px',
                         borderRadius: '50%',
-                        bgcolor: n ? (edge ? '#fff' : colors.primary) : 'transparent',
+                        bgcolor: dotsLoading
+                          ? inMonth && !future
+                            ? colors.border
+                            : 'transparent'
+                          : n
+                            ? edge
+                              ? '#fff'
+                              : colors.primary
+                            : 'transparent',
+                        transition: 'background-color .3s',
+                        ...(dotsLoading ? { animation: 'nq-dot-pulse 1.2s ease-in-out infinite' } : {}),
+                        '@keyframes nq-dot-pulse': { '0%, 100%': { opacity: 0.35 }, '50%': { opacity: 1 } },
                       }}
                     />
                   </ButtonBase>
                 );
               })}
             </Box>
-            <Typography sx={{ fontSize: 12, color: colors.muted, mt: 1, minHeight: 18 }}>
-              {pendingStart ? 'Pick an end date for a range, or click again to close.' : 'Dots = days with captures.'}
+            <Typography sx={{ fontSize: 12, color: colors.muted, mt: 1, minHeight: 18, display: 'flex', alignItems: 'center', gap: 0.75 }}>
+              {pendingStart ? (
+                'Pick an end date for a range, or click again to close.'
+              ) : dotsLoading ? (
+                <>
+                  <CircularProgress size={11} thickness={5} sx={{ color: colors.muted }} />
+                  Checking which days have captures…
+                </>
+              ) : isError ? (
+                "Couldn't load capture days. Dates still work."
+              ) : (
+                'Dots = days with captures.'
+              )}
             </Typography>
           </Box>
         </Box>

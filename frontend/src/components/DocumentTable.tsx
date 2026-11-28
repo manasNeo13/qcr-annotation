@@ -172,6 +172,24 @@ export default function DocumentTable({
                               GRN ✓
                             </Box>
                           )}
+                          {doc.approval && !doc.approval.stale && (
+                            <Box
+                              component="span"
+                              sx={{
+                                px: 0.75,
+                                py: 0.1,
+                                borderRadius: '5px',
+                                fontSize: 11,
+                                fontWeight: 700,
+                                bgcolor: '#eff6ff',
+                                color: '#1d4ed8',
+                                border: '1px solid #bfdbfe',
+                                lineHeight: 1.6,
+                              }}
+                            >
+                              Approved ✓
+                            </Box>
+                          )}
                           <StatusChip status={doc.status} />
                         </Box>
                       </Box>
@@ -308,6 +326,26 @@ export default function DocumentTable({
                             GRN ✓
                           </Box>
                         )}
+                        {doc.approval && !doc.approval.stale && (
+                          <Box
+                            component="span"
+                            sx={{
+                              display: 'inline-block',
+                              mt: 0.5,
+                              px: 0.75,
+                              py: 0.1,
+                              borderRadius: '5px',
+                              fontSize: 11,
+                              fontWeight: 700,
+                              bgcolor: '#eff6ff',
+                              color: '#1d4ed8',
+                              border: '1px solid #bfdbfe',
+                              lineHeight: 1.6,
+                            }}
+                          >
+                            Approved ✓
+                          </Box>
+                        )}
                       </TableCell>
                       <TableCell
                         sx={{
@@ -325,7 +363,7 @@ export default function DocumentTable({
                         ) : (
                           doc.version > 1 && (
                             <Box component="span" sx={{ display: 'block', fontSize: 11, color: colors.brandDark }}>
-                              Edited · v{doc.version}
+                              Edited
                             </Box>
                           )
                         )}

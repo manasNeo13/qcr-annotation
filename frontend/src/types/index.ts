@@ -5,6 +5,10 @@ export interface UploadResult {
   inserted: number;
   updated: number;
   skipped: number;
+  /** Captures approved automatically (values = GRN on all fields). */
+  autoApproved?: number;
+  /** Capture day (IST, YYYY-MM-DD or 'unknown') → captures that got GRN data. */
+  byDay?: { date: string; count: number }[];
 }
 
 export type DocStatus = 'ok' | 'near_expiry' | 'expired';
@@ -50,7 +54,37 @@ export interface DocumentItem {
   /** True when client GRN revalidation data was uploaded and any field was changed. */
   grnEdited?: boolean;
   /** GRN revalidation values from client-submitted Excel. Null when no GRN data uploaded. */
+  /** session_results.metadata_status / grn_status (false once values change). */
+  metadataStatus?: boolean;
+  grnStatus?: boolean;
   grnData?: GrnData | null;
+  /** New scans with a result: values our model read (before any edit). */
+  modelData?: DocMetadata;
+  /** Whole-capture approval (new scans). null = not approved yet. */
+  approval?: Approval | null;
+}
+
+/** metadata = values as shown; grn = GRN values written into the capture. */
+export type ApproveSource = 'metadata' | 'grn';
+
+/** Per field: true = right, false = wrong, null = no value (not counted). */
+export interface ApprovalMarks {
+  mfgDate: boolean | null;
+  expiryDate: boolean | null;
+  batchNumber: boolean | null;
+  mrp: boolean | null;
+}
+
+export interface Approval {
+  /** What was approved: metadata (values shown), GRN, or auto (values matched GRN on all fields). */
+  source: 'metadata' | 'grn' | 'auto';
+  by: string | null;
+  at: string | null;
+  model: ApprovalMarks | null;
+  /** null = no GRN data when approved. */
+  grn: ApprovalMarks | null;
+  /** Values changed after approval → approve again. */
+  stale: boolean;
 }
 
 export interface ScanImage {
@@ -95,6 +129,8 @@ export interface ListParams {
   editor?: string;
   /** Show only captures with GRN revalidation changes. */
   grnEdited?: boolean;
+  /** Show only approved captures. */
+  approved?: boolean;
 }
 
 export type ListFilter = Omit<ListParams, 'page' | 'pageSize'>;
@@ -238,6 +274,8 @@ export interface Me extends User {
   clients: string[];
   /** Split team member: old captures of every client + captures assigned to them. */
   splitTeam?: boolean;
+  /** NHQ / admin roles + split team: may upload GRN Excel. */
+  grnUpload?: boolean;
   mustChangePassword?: boolean;
 }
 
@@ -322,10 +360,83 @@ export interface SplitOverview {
   today: string;
   members: SplitMember[];
   candidates: { id: string; name: string; email: string }[];
+  /** Sharing health on the backend copy that answered. */
+  assigner?: SplitAssigner;
+}
+export interface SplitAssigner {
+  /** Backend copy name (different names on refresh = several copies). */
+  server: string;
+  bootAt: string | null;
+  running: boolean;
+  lastRunAt: string | null;
+  lastError: { at: string | null; message: string } | null;
+  /** Active members this copy knows about. */
+  members: number;
+  /** Today on this copy: new captures found, shared out, kept shared (began before the team). */
+  today: { found: number; assigned: number; keptShared: number };
 }
 export interface SplitDivideResult {
   captures: number;
   days: { day: string; captures: number }[];
   perMember: { id: string; captures: number }[];
   done: boolean;
+}
+
+// ── Accuracy page (Model / GRN vs approved values) ─────────────────────────
+export type AccField = 'mrp' | 'mfgDate' | 'expiryDate' | 'batchNumber';
+export type AccSource = 'model' | 'grn';
+/** right / wrong = truth has a value; held = source has no value (NA); nv_* = truth blank (not on photo). */
+export type AccResult = 'right' | 'wrong' | 'held' | 'nv_abstain' | 'nv_answered';
+export type AccWinner = 'both' | 'model' | 'grn' | 'neither' | 'na';
+
+export interface AccCounts {
+  n: number;
+  right: number;
+  wrong: number;
+  held: number;
+  nv_abstain: number;
+  nv_answered: number;
+  day_conv: number;
+  punct: number;
+  answered: number;
+  accuracy: number | null;
+  coverage: number | null;
+}
+export type AccGroup = Partial<Record<AccField | 'ALL', Record<AccSource, AccCounts>>>;
+export interface AccWins {
+  both: number;
+  model: number;
+  grn: number;
+  neither: number;
+}
+/** vals[src] = [value shown, result]. */
+export type AccVals = Record<AccSource, [string, AccResult]>;
+export interface AccMismatch {
+  id: string;
+  client: string;
+  ean: string;
+  field: AccField;
+  edited: boolean;
+  truth: string | null;
+  by: string | null;
+  vals: AccVals;
+}
+export interface AccRow {
+  id: string;
+  ean: string;
+  client: string;
+  by: string | null;
+  at: string | null;
+  fields: Record<AccField, { truth: string; edited: boolean; winner: AccWinner; model: AccResult; grn: AccResult; vals: AccVals }>;
+}
+export interface AccuracyReport {
+  approved: number;
+  /** Captures in range with a result (approvable). */
+  total: number;
+  /** Keys: ALL, EDITED, NOT_EDITED, client:<key>. */
+  groups: Record<string, AccGroup>;
+  order: string[];
+  wins: Partial<Record<AccField | 'ALL', AccWins>>;
+  mismatches: AccMismatch[];
+  rows: AccRow[];
 }

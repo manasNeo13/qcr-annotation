@@ -87,7 +87,7 @@ export default function HistoryPanel({ doc }: { doc: DocumentItem }) {
                 }}
               />
               <Typography sx={{ fontWeight: 600, color: colors.textDark }}>
-                v{c.version} · {c.editedBy}
+                {c.editedBy}
               </Typography>
               <Typography sx={{ fontSize: 12, color: colors.muted, mb: 0.75 }}>{formatDateTime(c.editedAt)}</Typography>
               {c.diff.length === 0 ? (

@@ -6,8 +6,19 @@ const admin = env.DATA_SOURCE === 'mongo' ? await import('../repos/admin.js') : 
 
 /** Role + permissions of req.user (fresh from DB, 30s cache). Memory demo: everything. */
 export async function accessOf(user) {
-  if (!admin) return { role: user.role || 'NHQ', roleKey: 'nhq', permissions: [...PERMISSIONS], superAdmin: true, clients: [] };
+  if (!admin) return { role: user.role || 'NHQ', roleKey: 'nhq', permissions: [...PERMISSIONS], superAdmin: true, grnUpload: true, clients: [] };
   return admin.permissionsFor(user.id);
+}
+
+/** GRN upload: NHQ / admin roles + split team. Run after requireAuth. */
+export async function requireGrnUpload(req, _res, next) {
+  try {
+    req.access ??= await accessOf(req.user);
+    if (!req.access.grnUpload) throw new HttpError(403, 'Only NHQ, admin and split team can upload GRN');
+    next();
+  } catch (e) {
+    next(e);
+  }
 }
 
 /** Allow when user has ANY of `perms`. Sets req.access. Run after requireAuth. */

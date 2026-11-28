@@ -1,23 +1,21 @@
 import { Router } from 'express';
 import multer from 'multer';
-import XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
 import { HttpError } from '../lib/httpError.js';
 import { requireAuth } from '../middleware/auth.js';
-import { requirePerm } from '../middleware/permissions.js';
+import { requireGrnUpload } from '../middleware/permissions.js';
 import { repo } from '../repos/index.js';
 
+/** Upload: NHQ / admin roles + split team only (all clients). */
 const router = Router();
 
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 20 * 1024 * 1024 },
   fileFilter: (_req, file, cb) => {
-    const accepted =
-      file.mimetype.includes('spreadsheetml') ||
-      file.mimetype.includes('excel') ||
-      file.originalname.endsWith('.xlsx') ||
-      file.originalname.endsWith('.xls');
-    cb(accepted ? null : new HttpError(400, 'Only Excel files (.xlsx / .xls) are accepted'), accepted);
+    // exceljs reads .xlsx only (old binary .xls → re-save as .xlsx).
+    const accepted = file.mimetype.includes('spreadsheetml') || file.originalname.toLowerCase().endsWith('.xlsx');
+    cb(accepted ? null : new HttpError(400, 'Only Excel .xlsx files are accepted (re-save .xls as .xlsx)'), accepted);
   },
 });
 
@@ -43,7 +41,28 @@ const COL = {
   any_changed:       35, // Any Changed (Batch/EXP/MRP) (Yes/No → boolean)
 };
 
-/** xlsx Date object → 'YYYY-MM-DD' or null */
+/** exceljs cell value → plain value (formula → its result, rich text / link → text). */
+const plain = (v) => {
+  if (v == null || typeof v !== 'object' || v instanceof Date) return v;
+  if ('result' in v) return plain(v.result);
+  if (Array.isArray(v.richText)) return v.richText.map((t) => t.text).join('');
+  if ('text' in v) return plain(v.text);
+  if ('error' in v) return null;
+  return null;
+};
+
+/** Sheet → rows of 0-based cell arrays (header first), like a plain table. */
+function sheetRows(ws) {
+  const rows = [];
+  ws.eachRow({ includeEmpty: true }, (row) => {
+    // row.values is 1-based → drop slot 0.
+    const vals = Array.isArray(row.values) ? row.values.slice(1) : [];
+    rows.push(vals.map(plain));
+  });
+  return rows;
+}
+
+/** Excel Date → 'YYYY-MM-DD' or null */
 const toDate = (v) => {
   if (v instanceof Date && !isNaN(v.getTime())) return v.toISOString().slice(0, 10);
   return null;
@@ -104,45 +123,41 @@ function parseRow(row) {
 /**
  * POST /api/upload_client_revalidate_data
  * Body: multipart/form-data, field "file" = Excel workbook.
- * Reads the "OCR vs GRN" sheet, upserts rows into client_submited_metadata.
+ * Reads the "OCR vs GRN" sheet → session_results.grn of each capture's latest scan.
  */
-router.post(
-  '/',
-  requireAuth,
-  requirePerm('edit_capture'),
-  upload.single('file'),
-  async (req, res) => {
-    if (!req.file) {
-      throw new HttpError(400, 'No file uploaded — send the Excel as form-data field "file"');
-    }
+router.post('/', requireAuth, requireGrnUpload, upload.single('file'), async (req, res) => {
+  if (!req.file) {
+    throw new HttpError(400, 'No file uploaded — send the Excel as form-data field "file"');
+  }
 
-    const workbook = XLSX.read(req.file.buffer, { type: 'buffer', cellDates: true });
+  const workbook = new ExcelJS.Workbook();
+  try {
+    await workbook.xlsx.load(req.file.buffer);
+  } catch {
+    throw new HttpError(422, 'Could not read this file — is it a valid .xlsx?');
+  }
 
-    if (!workbook.SheetNames.includes(SHEET_NAME)) {
-      throw new HttpError(422, `Sheet "${SHEET_NAME}" not found in the uploaded workbook`);
-    }
+  const ws = workbook.getWorksheet(SHEET_NAME);
+  if (!ws) throw new HttpError(422, `Sheet "${SHEET_NAME}" not found in the uploaded workbook`);
 
-    const rows = XLSX.utils.sheet_to_json(workbook.Sheets[SHEET_NAME], {
-      header: 1,
-      raw: true,    // keep Date objects and numbers as-is
-      defval: null,
-    });
+  const rows = sheetRows(ws);
 
-    // rows[0] is the header row
-    const records = rows.slice(1).map(parseRow).filter(Boolean);
+  // rows[0] is the header row
+  const totalRows = Math.max(rows.length - 1, 0);
+  const records = rows.slice(1).map(parseRow).filter(Boolean);
+  if (!records.length) {
+    return res.json({ message: 'No data rows found', inserted: 0, updated: 0, skipped: 0 });
+  }
 
-    if (!records.length) {
-      return res.json({ message: 'No data rows found', inserted: 0, updated: 0, skipped: 0 });
-    }
-
-    const { inserted, updated } = await repo.sessionResults.upsertGrnData(records);
-    res.json({
-      message: `Processed ${records.length} of ${rows.length - 1} rows`,
-      inserted,
-      updated,
-      skipped: rows.length - 1 - records.length,
-    });
-  },
-);
+  const { inserted, updated, autoApproved = 0, byDay = [] } = await repo.sessionResults.upsertGrnData(records);
+  res.json({
+    message: `Processed ${records.length} of ${totalRows} rows`,
+    inserted,
+    updated,
+    autoApproved,
+    byDay,
+    skipped: totalRows - records.length,
+  });
+});
 
 export default router;

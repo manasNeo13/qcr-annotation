@@ -4,6 +4,7 @@ import RequirePerm from './auth/RequirePerm';
 import AppLayout from './components/AppLayout';
 import { LiveProvider } from './live/LiveContext';
 import DocumentDetailPage from './pages/DocumentDetailPage';
+import AccuracyPage from './pages/AccuracyPage';
 import AnnotationPage from './pages/AnnotationPage';
 import ChangePasswordPage from './pages/ChangePasswordPage';
 import DocumentsPage from './pages/DocumentsPage';
@@ -22,12 +23,13 @@ export default function App() {
           {/* Detail opens from Filter Table, Annotation or Edit Stats. */}
           <Route
             path="/documents/:id"
-            element={<RequirePerm perms={['view_documents', 'view_annotation', 'view_stats']}><DocumentDetailPage /></RequirePerm>}
+            element={<RequirePerm perms={['view_documents', 'view_annotation', 'view_stats', 'view_accuracy']}><DocumentDetailPage /></RequirePerm>}
           />
           <Route path="/annotation" element={<RequirePerm perms={['view_annotation']}><AnnotationPage /></RequirePerm>} />
           <Route path="/annotation/:ean" element={<RequirePerm perms={['view_annotation']}><AnnotationPage /></RequirePerm>} />
           <Route path="/annotation/:ean/:batch" element={<RequirePerm perms={['view_annotation']}><AnnotationPage /></RequirePerm>} />
           <Route path="/stats" element={<RequirePerm perms={['view_stats']}><StatsPage /></RequirePerm>} />
+          <Route path="/accuracy" element={<RequirePerm perms={['view_accuracy']}><AccuracyPage /></RequirePerm>} />
           <Route path="/users" element={<RequirePerm perms={['manage_users']}><UsersPage /></RequirePerm>} />
         </Route>
       </Route>

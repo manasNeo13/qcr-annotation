@@ -74,6 +74,8 @@ export async function permissionsFor(userId) {
     clients: u.clients,
     // Split team member: sees old captures of every client + own new ones.
     splitTeam: !isSuperAdmin(key) && u.split,
+    // GRN Excel upload: NHQ / admin roles + split team only.
+    grnUpload: isLockedRole(key) || u.split,
   };
 }
 

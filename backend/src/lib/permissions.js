@@ -9,14 +9,15 @@ export const PERMISSIONS = [
   'edit_capture', // Save capture values
   'view_stats', // Edit Stats
   'export_csv', // Edit Stats CSV export
+  'view_accuracy', // Accuracy page (Model / GRN vs approved values)
   'manage_users', // Users & roles page + change log
 ];
 
-/** Existing + new roles start with everything except user management. */
-export const DEFAULT_PERMISSIONS = PERMISSIONS.filter((p) => p !== 'manage_users');
+/** Existing + new roles start with everything except user management and Accuracy (NHQ / admin unless granted). */
+export const DEFAULT_PERMISSIONS = PERMISSIONS.filter((p) => p !== 'manage_users' && p !== 'view_accuracy');
 
 /** Any of these opens a capture detail page. */
-export const VIEW_PERMISSIONS = ['view_documents', 'view_annotation', 'view_stats'];
+export const VIEW_PERMISSIONS = ['view_documents', 'view_annotation', 'view_stats', 'view_accuracy'];
 
 /** Admin roles: always full access, can't be edited or deleted (no lock-out). Same set as store-scope org-wide roles. */
 export const LOCKED_ROLE_KEYS = ['nhq', 'admin', 'organization admin', 'org admin'];

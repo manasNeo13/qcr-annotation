@@ -23,6 +23,7 @@ import type {
   StatsFilter,
   StatusFilter,
   UploadResult,
+  AccuracyReport,
 } from '../types';
 import { NONE_KEY } from '../types';
 import { computeEditStats, editMatch } from '../utils/editStats';
@@ -257,6 +258,12 @@ export const mockApi = {
     return computeEditStats(docs, { detail, dayOf: (iso) => dayjs(iso).format('YYYY-MM-DD') });
   },
 
+  /** Demo data has no approvals → empty report. */
+  async getAccuracy(): Promise<AccuracyReport> {
+    await delay();
+    return { approved: 0, total: 0, groups: {}, order: [], wins: {}, mismatches: [], rows: [] };
+  },
+
   /** Stats drill-down. Capture day = createdAt (same as getStats). Newest capture first (stable after save). */
   async listEdited({ page, pageSize, status = 'all', q = '', from, to, changed = 'any', editor }: ListParams): Promise<ListResponse> {
     await delay();
@@ -334,7 +341,11 @@ export const mockApi = {
     return withImage(next);
   },
 
-  async uploadClientRevalidateData(_file: File): Promise<UploadResult> {
+  async approveDocument(): Promise<DocumentItem> {
+    throw new ApiError('Approve is not available in demo mode', 501);
+  },
+
+  async uploadClientRevalidateData(): Promise<UploadResult> {
     await delay(800);
     return { message: 'Mock: 0 rows processed', inserted: 0, updated: 0, skipped: 0 };
   },

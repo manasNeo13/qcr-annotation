@@ -29,13 +29,15 @@ import { ApiError } from '../api/client';
 import { useLive } from '../live/LiveContext';
 import { useAuth } from '../auth/AuthContext';
 import { useAccess } from '../auth/useAccess';
+import ApproveControl from '../components/ApproveControl';
+import GrnPanel from '../components/GrnPanel';
 import HistoryPanel from '../components/HistoryPanel';
 import ImageViewer from '../components/ImageViewer';
 import MetadataForm from '../components/MetadataForm';
 import StatusChip from '../components/StatusChip';
 import PageBreadcrumbs, { type Crumb } from '../components/PageBreadcrumbs';
-import { readDay, readFilter, statsPath } from '../hooks/useListState';
-import type { DocMetadata, DocumentItem, GrnData } from '../types';
+import { accuracyPath, readDay, readFilter, statsPath } from '../hooks/useListState';
+import type { ApproveSource, DocMetadata, DocumentItem } from '../types';
 import { annotationPath, batchLabel, eanLabel } from '../utils/annotation';
 import { formatDate, formatDateTime, formatMRP } from '../utils/format';
 import type { MetadataFormValues } from '../utils/validation';
@@ -48,6 +50,8 @@ const MOD = isMac ? '⌘' : 'Ctrl';
 const SHORTCUTS: [string, string][] = [
   ['← / →', 'Previous / next capture'],
   ['E', 'Edit'],
+  ['Enter', 'Approve metadata'],
+  ['Shift + Enter', 'Approve GRN data'],
   [`${MOD} + S`, 'Submit'],
   [`${MOD} + Enter`, 'Submit & next (next capture opens in edit mode)'],
   ['Esc', 'Cancel edit · back to list'],
@@ -118,80 +122,6 @@ function Field({ label, value, mono }: { label: string; value: string; mono?: bo
         {value}
       </Typography>
     </Box>
-  );
-}
-
-const AMBER = { bg: '#fffbeb', border: '#fcd34d', label: '#92400e', value: '#b45309' };
-
-function GrnField({ label, value, changed, mono }: { label: string; value: string; changed: boolean; mono?: boolean }) {
-  return (
-    <Box
-      sx={{
-        p: 1.5,
-        borderRadius: '8px',
-        bgcolor: changed ? AMBER.bg : colors.surface2,
-        border: `1px solid ${changed ? AMBER.border : colors.border}`,
-        minWidth: 0,
-        transition: 'background .2s, border-color .2s',
-      }}
-    >
-      <Typography sx={{ fontSize: 13.5, fontWeight: 600, color: changed ? AMBER.label : colors.muted }}>
-        {label}
-        {changed && (
-          <Box component="span" sx={{ ml: 0.75, fontSize: 11, fontWeight: 700, color: AMBER.value }}>
-            ● Changed
-          </Box>
-        )}
-      </Typography>
-      <Typography
-        sx={{
-          fontSize: 17,
-          fontWeight: 600,
-          color: changed ? AMBER.value : colors.textDark,
-          wordBreak: 'break-word',
-          fontFamily: mono ? 'ui-monospace, monospace' : undefined,
-        }}
-      >
-        {value || '—'}
-      </Typography>
-    </Box>
-  );
-}
-
-function GrnPanel({ grn }: { grn: GrnData }) {
-  return (
-    <Paper sx={{ p: { xs: 2, sm: 3 } }}>
-      <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 2 }}>
-        <Typography variant="h5" component="h2">GRN Data</Typography>
-        {grn.batchChanged || grn.mfdChanged || grn.expChanged || grn.mrpChanged ? (
-          <Box
-            component="span"
-            sx={{
-              px: 1, py: 0.2, borderRadius: '20px', fontSize: 12, fontWeight: 700,
-              bgcolor: AMBER.bg, color: AMBER.value, border: `1px solid ${AMBER.border}`,
-            }}
-          >
-            Edited by client
-          </Box>
-        ) : (
-          <Box
-            component="span"
-            sx={{
-              px: 1, py: 0.2, borderRadius: '20px', fontSize: 12, fontWeight: 700,
-              bgcolor: '#ecfdf5', color: '#007849', border: '1px solid #a7f3d0',
-            }}
-          >
-            No changes
-          </Box>
-        )}
-      </Box>
-      <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: { xs: 1, sm: 1.5 } }}>
-        <GrnField label="Manufacturing date" value={formatDate(grn.mfd ?? '')} changed={grn.mfdChanged} />
-        <GrnField label="Expiry date"        value={formatDate(grn.exp ?? '')} changed={grn.expChanged} />
-        <GrnField label="Batch number"       value={grn.batch ?? ''}          changed={grn.batchChanged} mono />
-        <GrnField label="MRP"               value={grn.mrp != null ? `₹${Number(grn.mrp).toFixed(2)}` : '—'} changed={grn.mrpChanged} />
-      </Box>
-    </Paper>
   );
 }
 
@@ -297,6 +227,7 @@ function DocumentDetail({ id }: { id: string }) {
   const base = readFilter(params);
   const filter = { ...base, ...(day && base.changed ? { from: day, to: day } : {}), ean, batch };
   const fromStats = !fromAnnotation && !!filter.changed;
+  const fromAccuracy = !fromAnnotation && !fromStats && params.get('src') === 'accuracy';
   const listSearch = params.toString();
   // Back target = list this capture was opened from.
   const listParams = new URLSearchParams(params);
@@ -306,7 +237,9 @@ function DocumentDetail({ id }: { id: string }) {
     ? annotationPath(ean, batch, listParams)
     : fromStats
       ? statsPath(params)
-      : `/documents${listSearch ? `?${listSearch}` : ''}`;
+      : fromAccuracy
+        ? accuracyPath(params)
+        : `/documents${listSearch ? `?${listSearch}` : ''}`;
   const upParams = new URLSearchParams(listParams);
   upParams.delete('page');
   upParams.delete('q');
@@ -319,6 +252,8 @@ function DocumentDetail({ id }: { id: string }) {
       ]
     : fromStats
       ? [{ label: 'Edit Stats', to: backTo }, { label: 'Capture' }]
+      : fromAccuracy
+        ? [{ label: 'Accuracy', to: backTo }, { label: 'Capture' }]
       : [{ label: 'Annotation Table', to: backTo }, { label: 'Capture' }];
   const qc = useQueryClient();
   const { user } = useAuth();
@@ -361,6 +296,7 @@ function DocumentDetail({ id }: { id: string }) {
   });
   // New scan without a saved result → nothing to edit.
   const canEdit = canEditCaptures && !doc?.noResult;
+  const canApprove = canEdit && !editing && remote?.kind !== 'deleted';
   // "Submit & next" may land on such a scan → leave edit mode.
   useEffect(() => {
     if (doc?.noResult) setEditing(false);
@@ -387,6 +323,18 @@ function DocumentDetail({ id }: { id: string }) {
       afterSave.current = null;
       toast.error(e.message || 'Update failed');
     },
+  });
+
+  const approveMut = useMutation({
+    mutationFn: (source: ApproveSource) => api.approveDocument(id, source),
+    onSuccess: (updated: DocumentItem) => {
+      qc.setQueryData(['document', id], updated);
+      qc.invalidateQueries({ queryKey: ['documents'] });
+      qc.invalidateQueries({ queryKey: ['groups'] });
+      qc.invalidateQueries({ queryKey: ['edit-stats'] });
+      toast.success(updated.approval?.source === 'auto' ? 'Approved — values match GRN' : 'Approved');
+    },
+    onError: (e: Error) => toast.error(e.message || 'Approve failed'),
   });
 
   // No placeholder: previous capture's prev/next must never drive this one (caused skips 2 → 4).
@@ -483,10 +431,19 @@ function DocumentDetail({ id }: { id: string }) {
       else if (e.key.toLowerCase() === 'e' && canEdit && doc && remote?.kind !== 'deleted') setEditing(true);
       else if (e.key === 'Escape') back();
       else if (e.key === '?') setHelp(true);
+      else if (e.key === 'Enter' && !e.repeat && !t.closest('button, a, [role=button], [role=link]')) {
+        // Enter → approve metadata, Shift + Enter → approve GRN (same rules as the buttons).
+        if (!doc || !doc.images || !canApprove || approveMut.isPending) return;
+        e.preventDefault();
+        if (e.shiftKey) {
+          if (!doc.grnData) toast.error('No GRN data for this capture');
+          else if (!doc.grnStatus) approveMut.mutate('grn');
+        } else if (!doc.metadataStatus) approveMut.mutate('metadata');
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [editing, go, nav?.prevId, nav?.nextId, submit, cancel, back, canEdit, doc, remote?.kind]);
+  }, [editing, go, nav?.prevId, nav?.nextId, submit, cancel, back, canEdit, doc, remote?.kind, canApprove, approveMut]);
 
   // Live: this capture edited/deleted elsewhere (SDK, main app, another user).
   const { subscribe } = useLive();
@@ -857,10 +814,11 @@ function DocumentDetail({ id }: { id: string }) {
               transition: 'outline .2s',
             }}
           >
+            {/* Title left, Approve top right. Edited by / time under the values. */}
             <Box
               sx={{
                 display: 'flex',
-                alignItems: 'baseline',
+                alignItems: 'center',
                 justifyContent: 'space-between',
                 gap: 1,
                 mb: 2,
@@ -870,11 +828,15 @@ function DocumentDetail({ id }: { id: string }) {
               <Typography variant="h5" component="h2">
                 {editing ? 'Edit metadata' : 'Metadata'}
               </Typography>
-              {doc && (
-                <Typography sx={{ fontSize: 12, color: colors.muted }}>
-                  v{doc.version} · {doc.version > 1 ? `edited by ${doc.updatedBy} · ` : ''}
-                  {formatDateTime(doc.updatedAt)}
-                </Typography>
+              {doc && doc.images && !doc.noResult && !editing && (
+                <ApproveControl
+                  approved={!!doc.metadataStatus}
+                  approval={doc.approval}
+                  canApprove={canApprove}
+                  pending={approveMut.isPending && approveMut.variables === 'metadata'}
+                  onApprove={() => approveMut.mutate('metadata')}
+                  label="metadata"
+                />
               )}
             </Box>
 
@@ -912,9 +874,24 @@ function DocumentDetail({ id }: { id: string }) {
                 <Field label="MRP" value={formatMRP(doc.metadata.mrp)} />
               </Box>
             )}
+            {doc && !editing && (
+              <Typography sx={{ fontSize: 12, color: colors.muted, mt: 1.5 }}>
+                {doc.version > 1 ? `Edited by ${doc.updatedBy} · ` : 'Captured · '}
+                {formatDateTime(doc.updatedAt)}
+              </Typography>
+            )}
           </Paper>
 
-          {doc?.grnData && <GrnPanel grn={doc.grnData} />}
+          {doc?.grnData && (
+            <GrnPanel
+              grn={doc.grnData}
+              approved={!!doc.grnStatus}
+              approval={doc.approval}
+              canApprove={canApprove && !!doc.images}
+              pending={approveMut.isPending && approveMut.variables === 'grn'}
+              onApprove={() => approveMut.mutate('grn')}
+            />
+          )}
 
           {doc && <HistoryPanel doc={doc} />}
         </Box>

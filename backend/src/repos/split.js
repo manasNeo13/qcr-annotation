@@ -11,6 +11,7 @@
  * - Writes are conditional (assigned_to missing) → never overwrites, safe with several backend copies.
  * - Members see: unassigned (old) captures of every client + captures assigned to them (repos/mongo.js scope()).
  */
+import os from 'node:os';
 import { ObjectId } from 'mongodb';
 import { HttpError } from '../lib/httpError.js';
 import { istDay, istWindow } from '../lib/istDay.js';
@@ -20,6 +21,8 @@ import { clearAccessCache, getDb } from './mongo.js';
 const TICK_MS = 15_000;
 const OVERLAP_MS = 120_000;
 const BATCH = 5000;
+// Team re-read from DB this often: other backend copies may have changed it (each copy has its own memory).
+const TEAM_TTL_MS = 60_000;
 
 const col = (n) => getDb().collection(n);
 
@@ -30,6 +33,8 @@ let timer = null;
 let running = null; // in-flight assign() promise (serialised)
 const skipped = new Set(); // env ids of OLD captures seen with new docs (recaptures) → not assigned
 let failures = 0;
+// Last assigner run on THIS backend copy (shown in the Split team tab).
+const status = { server: os.hostname(), bootAt: new Date(), lastRunAt: null, lastError: null, members: 0, found: 0, assigned: 0, keptShared: 0, today: { found: 0, assigned: 0, keptShared: 0 } };
 
 // ── Team ─────────────────────────────────────────────────────────────────
 async function loadTeam() {
@@ -40,7 +45,8 @@ async function loadTeam() {
     .filter((u) => u.id && !isSuperAdmin(roleKey(u.role)))
     .map((u) => ({ id: String(u.id), active: u.status !== false, joinedAt: u.split_joined_at ? new Date(u.split_joined_at) : new Date() }));
   const start = members.length ? Math.min(...members.map((m) => m.joinedAt.getTime())) : null;
-  team = { members, startId: start ? ObjectId.createFromTime(Math.floor(start / 1000)) : null };
+  team = { at: Date.now(), key: members.map((m) => `${m.id}:${m.active}`).sort().join(','), members, startId: start ? ObjectId.createFromTime(Math.floor(start / 1000)) : null };
+  status.members = members.filter((m) => m.active).length;
   return team;
 }
 const getTeam = async () => team ?? loadTeam();
@@ -100,6 +106,7 @@ async function assignPass(fromMs) {
   const envs = new Map();
   for (const d of docs) if (!skipped.has(d.env_id) && !envs.has(d.env_id)) envs.set(d.env_id, d);
   if (!envs.size) return 0;
+  status.found += envs.size;
   const ids = [...envs.keys()];
   const [owned, old] = await Promise.all([
     col('metadata')
@@ -115,6 +122,7 @@ async function assignPass(fromMs) {
     const prev = ownerOf.get(env); // owner first: old captures NHQ divided (divideDays) keep their owner
     if (!prev && oldSet.has(env)) {
       skipped.add(env); // capture began before the team → stays shared
+      status.keptShared += 1;
       continue;
     }
     let to;
@@ -139,6 +147,7 @@ async function assignPass(fromMs) {
     }
     n += 1;
   }
+  status.assigned += n;
   if (skipped.size > 50_000) skipped.clear();
   if (n) clearAccessCache();
   return n;
@@ -148,24 +157,50 @@ async function assignPass(fromMs) {
 export function assignNow() {
   running ??= (async () => {
     try {
-      if (!team) await loadTeam();
-      if (!team.startId) return 0;
-      // First run (boot / team change): full sweep from team start; then only recent docs.
-      const full = !bookmark;
-      let total = 0;
-      for (let i = 0; i < 20; i++) {
-        const n = await assignPass(full ? 0 : bookmark - OVERLAP_MS);
-        total += n;
-        if (!full || n === 0) break;
+      // Re-read team now and then (changed on another backend copy?) → if it changed: recount + full sweep.
+      if (!team || Date.now() - team.at > TEAM_TTL_MS) {
+        const before = team?.key;
+        await loadTeam();
+        if (before !== undefined && before !== team.key) {
+          bookmark = 0;
+          skipped.clear();
+          clearAccessCache();
+        }
+        counts = new Map(); // other copies may have assigned too
       }
-      if (full && !bookmark) bookmark = Date.now();
-      failures = 0;
-      return total;
+      status.lastRunAt = new Date();
+      // Running totals for today's IST day (shown in the Split team tab).
+      const day = istDay(new Date());
+      if (status.today.day !== day) status.today = { day, found: 0, assigned: 0, keptShared: 0 };
+      const before = { found: status.found, assigned: status.assigned, keptShared: status.keptShared };
+      try {
+        return await runPasses();
+      } finally {
+        status.today.found += status.found - before.found;
+        status.today.assigned += status.assigned - before.assigned;
+        status.today.keptShared += status.keptShared - before.keptShared;
+      }
     } finally {
       running = null;
     }
   })();
   return running;
+}
+
+async function runPasses() {
+  if (!team.startId) return 0;
+  // First run (boot / team change): full sweep from team start; then only recent docs.
+  const full = !bookmark;
+  let total = 0;
+  for (let i = 0; i < 20; i++) {
+    const n = await assignPass(full ? 0 : bookmark - OVERLAP_MS);
+    total += n;
+    if (!full || n === 0) break;
+  }
+  if (full && !bookmark) bookmark = Date.now();
+  failures = 0;
+  status.lastError = null;
+  return total;
 }
 
 async function tick() {
@@ -174,6 +209,7 @@ async function tick() {
     await assignNow();
   } catch (e) {
     failures = Math.min(failures + 1, 4);
+    status.lastError = { at: new Date(), message: String(e.message).slice(0, 300) };
     console.warn(`[split] assign failed (${failures}): ${e.message}`);
   }
   timer = setTimeout(tick, TICK_MS * 2 ** Math.min(failures, 3));
@@ -248,7 +284,23 @@ export async function overview() {
     .filter((u) => u.split_team !== true && u.status !== false && !isSuperAdmin(roleKey(u.role)))
     .map((u) => ({ id: String(u.id), name: name(u), email: u.email ? String(u.email) : '' }))
     .sort((a, b) => a.name.localeCompare(b.name));
-  return { startedAt: team.startId ? team.startId.getTimestamp().toISOString() : null, today, members, candidates };
+  const iso = (d) => (d ? d.toISOString() : null);
+  return {
+    startedAt: team.startId ? team.startId.getTimestamp().toISOString() : null,
+    today,
+    members,
+    candidates,
+    // Assigner health on the backend copy that answered this request.
+    assigner: {
+      server: status.server,
+      bootAt: iso(status.bootAt),
+      running: !!timer || !!running,
+      lastRunAt: iso(status.lastRunAt),
+      lastError: status.lastError ? { at: iso(status.lastError.at), message: status.lastError.message } : null,
+      members: status.members,
+      today: status.today.day === today ? { found: status.today.found, assigned: status.today.assigned, keptShared: status.today.keptShared } : { found: 0, assigned: 0, keptShared: 0 },
+    },
+  };
 }
 
 async function addMembers(ids, by) {
